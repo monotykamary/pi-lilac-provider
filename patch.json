@@ -1,0 +1,45 @@
+{
+  "moonshotai/kimi-k2.6": {
+    "reasoning": true,
+    "cost": {
+      "input": 0.70,
+      "output": 3.50,
+      "cacheRead": 0.20
+    },
+    "compat": {
+      "thinkingFormat": "qwen-chat-template",
+      "maxTokensField": "max_completion_tokens",
+      "supportsDeveloperRole": true,
+      "supportsStore": false
+    }
+  },
+  "zai-org/glm-5.1": {
+    "reasoning": true,
+    "maxTokens": 131072,
+    "cost": {
+      "input": 0.90,
+      "output": 3.00,
+      "cacheRead": 0.27
+    },
+    "compat": {
+      "thinkingFormat": "qwen-chat-template",
+      "maxTokensField": "max_completion_tokens",
+      "supportsDeveloperRole": true,
+      "supportsStore": false
+    }
+  },
+  "google/gemma-4-31b-it": {
+    "reasoning": true,
+    "cost": {
+      "input": 0.11,
+      "output": 0.35,
+      "cacheRead": 0
+    },
+    "compat": {
+      "thinkingFormat": "qwen-chat-template",
+      "maxTokensField": "max_completion_tokens",
+      "supportsDeveloperRole": true,
+      "supportsStore": false
+    }
+  }
+}
