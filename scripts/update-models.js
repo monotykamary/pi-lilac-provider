@@ -19,7 +19,8 @@
  * existing data and only adds new models with API-derived defaults.
  * Curate models.json manually after new model discovery.
  *
- * patch.json is applied at runtime by the provider — not baked into models.json.
+ * patch.json and custom-models.json are applied at runtime by the provider.
+ * They are NOT baked into models.json, but ARE used to generate the README table.
  *
  * Requires LILAC_API_KEY environment variable.
  */
@@ -32,6 +33,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const MODELS_API_URL = 'https://api.getlilac.com/v1/models';
 const MODELS_JSON_PATH = path.join(__dirname, '..', 'models.json');
+const PATCH_JSON_PATH = path.join(__dirname, '..', 'patch.json');
+const CUSTOM_MODELS_JSON_PATH = path.join(__dirname, '..', 'custom-models.json');
 const README_PATH = path.join(__dirname, '..', 'README.md');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -177,6 +180,60 @@ function generateDisplayName(id) {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
+function applyPatch(model, patch) {
+  const result = { ...model };
+  if (patch.name !== undefined) result.name = patch.name;
+  if (patch.reasoning !== undefined) result.reasoning = patch.reasoning;
+  if (patch.input !== undefined) result.input = patch.input;
+  if (patch.contextWindow !== undefined) result.contextWindow = patch.contextWindow;
+  if (patch.maxTokens !== undefined) result.maxTokens = patch.maxTokens;
+  if (patch.cost) {
+    result.cost = {
+      input: patch.cost.input ?? result.cost.input,
+      output: patch.cost.output ?? result.cost.output,
+      cacheRead: patch.cost.cacheRead ?? result.cost.cacheRead,
+      cacheWrite: patch.cost.cacheWrite ?? result.cost.cacheWrite,
+    };
+  }
+  if (patch.compat) {
+    result.compat = { ...(result.compat || {}), ...patch.compat };
+  }
+  if (!result.reasoning && result.compat?.thinkingFormat) {
+    delete result.compat.thinkingFormat;
+  }
+  if (result.compat && Object.keys(result.compat).length === 0) {
+    delete result.compat;
+  }
+  return result;
+}
+
+function buildModels(baseModels, customModels, patchData) {
+  const modelMap = new Map();
+  for (const model of baseModels) {
+    modelMap.set(model.id, model);
+  }
+  for (const [id, patchEntry] of Object.entries(patchData)) {
+    const existing = modelMap.get(id);
+    if (existing) {
+      modelMap.set(id, applyPatch(existing, patchEntry));
+    }
+  }
+  for (const model of customModels) {
+    const existing = modelMap.get(model.id);
+    const patchEntry = patchData[model.id];
+    if (existing && patchEntry) {
+      modelMap.set(model.id, applyPatch(model, patchEntry));
+    } else if (existing) {
+      modelMap.set(model.id, model);
+    } else if (patchEntry) {
+      modelMap.set(model.id, applyPatch(model, patchEntry));
+    } else {
+      modelMap.set(model.id, model);
+    }
+  }
+  return Array.from(modelMap.values());
+}
+
 // ─── README generation ──────────────────────────────────────────────────────
 
 function formatContext(n) {
@@ -255,11 +312,17 @@ async function main() {
     // Sort by model name
     models.sort((a, b) => a.name.localeCompare(b.name));
 
-    // Save models.json
+    // Save models.json (pure API output, no patch/custom baked in)
     saveJson(MODELS_JSON_PATH, models);
 
+    // Build full model list for README: base → patch → custom
+    const patchData = loadJson(PATCH_JSON_PATH);
+    const customModels = loadJson(CUSTOM_MODELS_JSON_PATH);
+    const readmeModels = buildModels(models, Array.isArray(customModels) ? customModels : [], patchData);
+    readmeModels.sort((a, b) => a.name.localeCompare(b.name));
+
     // Update README
-    updateReadme(models);
+    updateReadme(readmeModels);
 
     // Summary
     const newIds = new Set(models.map(m => m.id));
