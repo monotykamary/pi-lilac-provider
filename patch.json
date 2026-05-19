@@ -9,7 +9,7 @@
     "compat": {
       "thinkingFormat": "qwen-chat-template",
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
+      "supportsDeveloperRole": false,
       "supportsStore": false
     }
   },
@@ -24,8 +24,9 @@
     "compat": {
       "thinkingFormat": "qwen-chat-template",
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
-      "supportsStore": false
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
+      "zaiToolStream": true
     }
   },
   "google/gemma-4-31b-it": {
@@ -40,6 +41,11 @@
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": true,
       "supportsStore": false
+    }
+  },
+  "minimaxai/minimax-m2.7": {
+    "compat": {
+      "supportsDeveloperRole": false
     }
   }
 }

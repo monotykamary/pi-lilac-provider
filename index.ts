@@ -17,15 +17,30 @@
  * Key API notes:
  *   - Uses `max_completion_tokens` (preferred for reasoning models)
  *   - All reasoning models return chain-of-thought in `reasoning` field
- *   - Developer role is supported (vLLM maps to system)
+ *   - Developer role is NOT supported by GLM, Kimi, or MiniMax chat templates;
+ *     prompts with role: "developer" are silently dropped. Only Gemma 4 handles it.
+ *     supportsDeveloperRole is set to false for affected models via patch.json.
  *   - Context caching supported on Kimi K2.6 and GLM 5.1 (cacheRead pricing)
  *   - Gemma 4 does NOT support cache read pricing
  *   - `store` parameter is NOT supported
  *
- * GLM 5.1 caveat: On current vLLM builds, disabling reasoning may still leak
- * chain-of-thought into `content` terminated by a `</think>` marker. Clients that
- * require hard-suppressed output should post-process accordingly.
- * See: https://github.com/vllm-project/vllm/issues/31319
+ * GLM 5.1 caveats:
+ *   - vLLM's streaming parser omits `delta.tool_calls` when the model decides to
+ *     call tools, finishing with `finish_reason: "tool_calls"` but an empty delta.
+ *     Setting `zaiToolStream: true` sends `tool_stream: true` in the request,
+ *     which forces vLLM to use the explicit tool streaming path that correctly
+ *     emits tool call chunks.
+ *   - GLM's chat template does not handle the `developer` role — prompts sent
+ *     with `role: "developer"` are silently dropped. `supportsDeveloperRole: false`
+ *     forces pi to use `role: "system"` instead.
+ *   - On current vLLM builds, disabling reasoning may still leak chain-of-thought
+ *     into `content` terminated by a ``` marker. Clients that require
+ *     hard-suppressed output should post-process accordingly.
+ *     See: https://github.com/vllm-project/vllm/issues/31319
+ *
+ * Kimi K2.6 / MiniMax M2.7 caveat: Their chat templates also do not handle the
+ * `developer` role — prompts are silently dropped. `supportsDeveloperRole: false`
+ * is set for these models as well.
  *
  * Gemma 4 caveat: vLLM's reasoning parser can fail to populate the `reasoning`
  * field when special tokens are stripped. Combining `enable_thinking: false`
