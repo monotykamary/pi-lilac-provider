@@ -229,6 +229,7 @@ function transformApiModel(apiModel: any): JsonModel | null {
       supportsStore: false,
       maxTokensField: "max_completion_tokens",
       thinkingFormat: "qwen-chat-template",
+      supportsReasoningEffort: true,
     };
   } else {
     model.compat = {

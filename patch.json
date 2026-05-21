@@ -10,7 +10,8 @@
       "thinkingFormat": "qwen-chat-template",
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": false,
-      "supportsStore": false
+      "supportsStore": false,
+      "supportsReasoningEffort": true
     }
   },
   "zai-org/glm-5.1": {
@@ -26,7 +27,8 @@
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": false,
       "supportsStore": false,
-      "zaiToolStream": true
+      "zaiToolStream": true,
+      "supportsReasoningEffort": true
     }
   },
   "google/gemma-4-31b-it": {
@@ -40,7 +42,8 @@
       "thinkingFormat": "qwen-chat-template",
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": true,
-      "supportsStore": false
+      "supportsStore": false,
+      "supportsReasoningEffort": true
     }
   },
   "minimaxai/minimax-m2.7": {
