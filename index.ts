@@ -346,7 +346,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerProvider("lilac", {
     baseUrl: BASE_URL,
-    apiKey: "LILAC_API_KEY",
+    apiKey: "$LILAC_API_KEY",
     api: "openai-completions",
     models: staleModels,
   });
@@ -360,7 +360,7 @@ export default function (pi: ExtensionAPI) {
         if (freshBase && !signal.aborted) {
           pi.registerProvider("lilac", {
             baseUrl: BASE_URL,
-            apiKey: "LILAC_API_KEY",
+            apiKey: "$LILAC_API_KEY",
             api: "openai-completions",
             models: buildModels(freshBase, customModels, patches),
           });
