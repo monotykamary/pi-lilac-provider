@@ -1,6 +1,19 @@
-# pi-lilac-provider
+<div align="center">
 
-A [pi](https://github.com/badlogic/pi-mono) extension that registers [Lilac](https://getlilac.com/) as a custom provider. Access Kimi K2.6, GLM 5.1, and Gemma 4 models through Lilac's OpenAI-compatible API on idle GPUs.
+# 💜 pi-lilac-provider
+
+**Kimi K2.6, GLM 5.1, Gemma 4 & more on idle GPUs via [Lilac](https://getlilac.com/)**
+
+_A [pi](https://github.com/earendil-works/pi-coding-agent) provider extension for cost-efficient GPU inference._
+
+[![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://github.com/earendil-works/pi-coding-agent)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
+</div>
+
+---
+
+Access Kimi K2.6, GLM 5.1, MiniMax M2.7, and Gemma 4 models through Lilac's OpenAI-compatible API on idle GPUs.
 
 ## Features
 
