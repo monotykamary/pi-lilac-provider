@@ -79,6 +79,12 @@ import path from "path";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface JsonDiscount {
+  supplyState: string;
+  discountPercent: number;
+  creditMultiplier: number;
+}
+
 interface JsonModel {
   id: string;
   name: string;
@@ -99,6 +105,7 @@ interface JsonModel {
     thinkingFormat?: "openai" | "zai" | "qwen" | "qwen-chat-template";
     supportsReasoningEffort?: boolean;
   };
+  discount?: JsonDiscount;
 }
 
 interface PatchEntry {
@@ -187,9 +194,11 @@ function buildModels(base: JsonModel[], custom: JsonModel[], patch: PatchData): 
 
 const PROVIDER_ID = "lilac";
 const BASE_URL = "https://api.getlilac.com/v1";
+const STATUS_URL = "https://api.getlilac.com/status";
 const MODELS_URL = `${BASE_URL}/models`;
 const CACHE_DIR = path.join(os.homedir(), ".pi", "agent", "cache");
 const CACHE_PATH = path.join(CACHE_DIR, `${PROVIDER_ID}-models.json`);
+const DISCOUNT_CACHE_PATH = path.join(CACHE_DIR, `${PROVIDER_ID}-discounts.json`);
 const LIVE_FETCH_TIMEOUT_MS = 8000;
 
 /** Transform a model from the Lilac /v1/models API. Lilac returns rich metadata. */
@@ -197,7 +206,6 @@ function transformApiModel(apiModel: any): JsonModel | null {
   const features: string[] = apiModel.supported_features || [];
   const modalities = apiModel.architecture?.input_modalities || [];
   const hasImage = modalities.includes("image");
-  const hasVideo = modalities.includes("video");
   const pricing = apiModel.pricing || {};
 
   // Lilac API returns per-token pricing (e.g. "0.0000007" = $0.70/M tokens)
@@ -316,19 +324,127 @@ function loadStaleModels(embeddedModels: JsonModel[]): JsonModel[] {
   return cached;
 }
 
-async function revalidateModels(apiKey: string | undefined, embeddedModels: JsonModel[], signal?: AbortSignal): Promise<JsonModel[] | null> {
-  if (!apiKey) return null;
-  const liveModels = await fetchLiveModels(apiKey, signal);
-  if (!liveModels || liveModels.length === 0) return null;
-  const merged = mergeWithEmbedded(liveModels, embeddedModels);
-  cacheModels(merged);
-  return merged;
+async function fetchStatusDiscounts(apiKey: string, signal?: AbortSignal): Promise<Map<string, JsonDiscount> | null> {
+  try {
+    const response = await fetch(STATUS_URL, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS), signal]) : AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as Record<string, unknown>;
+    const discounts = new Map<string, JsonDiscount>();
+    // The /status endpoint returns per-model discount data in a "models" array.
+    // Each model object has: id, current_subscription_supply_state,
+    // current_subscription_discount_percent, current_subscription_credit_multiplier.
+    const models = data.models;
+    if (Array.isArray(models)) {
+      for (const m of models) {
+        if (!m || typeof m !== "object" || !m.id) continue;
+        discounts.set(m.id, {
+          supplyState: String(m.current_subscription_supply_state || "unknown"),
+          discountPercent: Number(m.current_subscription_discount_percent ?? 0),
+          creditMultiplier: parseFloat(String(m.current_subscription_credit_multiplier ?? "1")),
+        });
+      }
+    }
+    return discounts;
+  } catch {
+    return null;
+  }
 }
+
+function applyDiscounts(models: JsonModel[], discounts: Map<string, JsonDiscount> | null): JsonModel[] {
+  if (!discounts || discounts.size === 0) return models;
+  return models.map(model => {
+    const discount = discounts.get(model.id);
+    if (!discount) return model;
+    // credit_multiplier from /status is the effective price factor.
+    // E.g. "0.75" means pay 75% of list price. For MiniMax with "1.00" there's no discount.
+    // discountPercent is informational (it equals (1 - creditMultiplier) * 100).
+    const factor = discount.creditMultiplier;
+    const applyFactor = (n: number) => n > 0 ? Math.round(n * factor * 10000) / 10000 : n;
+    return {
+      ...model,
+      cost: {
+        input: applyFactor(model.cost.input),
+        output: applyFactor(model.cost.output),
+        cacheRead: applyFactor(model.cost.cacheRead),
+        cacheWrite: model.cost.cacheWrite,
+      },
+      discount,
+    };
+  });
+}
+
+function cacheDiscounts(discounts: Map<string, JsonDiscount>): void {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(DISCOUNT_CACHE_PATH, JSON.stringify(Object.fromEntries(discounts), null, 2) + "\n");
+  } catch {
+    // non-fatal
+  }
+}
+
+function loadCachedDiscounts(): Map<string, JsonDiscount> | null {
+  try {
+    const data = JSON.parse(fs.readFileSync(DISCOUNT_CACHE_PATH, "utf8")) as Record<string, JsonDiscount>;
+    const map = new Map<string, JsonDiscount>();
+    for (const [key, value] of Object.entries(data)) {
+      if (value && typeof value === "object") {
+        map.set(key, {
+          supplyState: String(value.supplyState || "unknown"),
+          discountPercent: Number(value.discountPercent ?? 0),
+          creditMultiplier: Number(value.creditMultiplier ?? 1),
+        });
+      }
+    }
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+function formatDiscountStatus(modelId?: string): string {
+  if (!modelId) return "supply: —";
+  if (!latestDiscounts) return "supply: checking…";
+  const discount = latestDiscounts.get(modelId);
+  if (!discount) return "supply: —";
+  return `supply: ${discount.supplyState} · sub-discount: ${discount.discountPercent}%`;
+}
+
+function dimStatus(ctx: any, text: string): string {
+  try {
+    return ctx.ui.theme.fg("dim", text);
+  } catch {
+    return text;
+  }
+}
+
+function discountsChanged(
+  a: Map<string, JsonDiscount> | null,
+  b: Map<string, JsonDiscount> | null,
+): boolean {
+  if (!a || !b) return true;
+  if (a.size !== b.size) return true;
+  for (const [key, valA] of a) {
+    const valB = b.get(key);
+    if (!valB) return true;
+    if (valA.supplyState !== valB.supplyState) return true;
+    if (valA.discountPercent !== valB.discountPercent) return true;
+    if (valA.creditMultiplier !== valB.creditMultiplier) return true;
+  }
+  return false;
+}
+
+
 
 // ─── API Key Resolution (via ModelRegistry) ────────────────────────────────────
 
 let cachedApiKey: string | undefined;
 let revalidateAbort: AbortController | null = null;
+let latestDiscounts: Map<string, JsonDiscount> | null = null;
+let lastDiscountFetchTime = 0;
+const STATUS_CACHE_TTL_MS = 30000;
 
 async function resolveApiKey(modelRegistry: ModelRegistry): Promise<void> {
   cachedApiKey = await modelRegistry.getApiKeyForProvider("lilac") ?? undefined;
@@ -342,7 +458,8 @@ export default function (pi: ExtensionAPI) {
   const patches = patchData as PatchData;
 
   const staleBase = loadStaleModels(embeddedModels);
-  const staleModels = buildModels(staleBase, customModels, patches);
+  latestDiscounts = loadCachedDiscounts();
+  const staleModels = applyDiscounts(buildModels(staleBase, customModels, patches), latestDiscounts);
 
   pi.registerProvider("lilac", {
     baseUrl: BASE_URL,
@@ -351,25 +468,152 @@ export default function (pi: ExtensionAPI) {
     models: staleModels,
   });
 
+  const DISCOUNT_ENTRY_TYPE = "lilac-discount";
+
+  interface DiscountEntry {
+    modelId: string;
+    supplyState: string;
+    discountPercent: number;
+    creditMultiplier: number;
+  }
+
+  function replayDiscountEvents(ctx: any): void {
+    latestDiscounts = loadCachedDiscounts() ?? new Map();
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === "custom" && entry.customType === DISCOUNT_ENTRY_TYPE && entry.data) {
+        const d = entry.data as DiscountEntry;
+        latestDiscounts.set(d.modelId, {
+          supplyState: d.supplyState,
+          discountPercent: d.discountPercent,
+          creditMultiplier: d.creditMultiplier,
+        });
+      }
+    }
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     revalidateAbort?.abort();
     revalidateAbort = new AbortController();
     const signal = revalidateAbort.signal;
+
+    // Replay persisted discount state from session JSONL (synchronous, zero-latency)
+    replayDiscountEvents(ctx);
+
+    // Show status immediately with replayed/cached data — don't block pi startup
+    const model = ctx.model;
+    if (model?.provider === "lilac") {
+      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(model.id)));
+    }
+
+    // Fire-and-forget: resolve API key, then fetch live data in background.
+    // Provider and status are hot-swapped when results arrive.
     resolveApiKey(ctx.modelRegistry).then(() => {
-      revalidateModels(cachedApiKey, embeddedModels, signal).then((freshBase) => {
-        if (freshBase && !signal.aborted) {
+      if (!cachedApiKey || signal.aborted) return;
+
+      Promise.all([
+        fetchLiveModels(cachedApiKey, signal),
+        fetchStatusDiscounts(cachedApiKey, signal),
+      ]).then(([liveModels, discounts]) => {
+        if (signal.aborted) return;
+
+        if (discounts) {
+          lastDiscountFetchTime = Date.now();
+          cacheDiscounts(discounts);
+          latestDiscounts = discounts;
+        }
+
+        if (liveModels && liveModels.length > 0) {
+          const merged = mergeWithEmbedded(liveModels, embeddedModels);
+          cacheModels(merged);
           pi.registerProvider("lilac", {
             baseUrl: BASE_URL,
             apiKey: "$LILAC_API_KEY",
             api: "openai-completions",
-            models: buildModels(freshBase, customModels, patches),
+            models: applyDiscounts(buildModels(merged, customModels, patches), latestDiscounts),
+          });
+        } else if (discounts) {
+          pi.registerProvider("lilac", {
+            baseUrl: BASE_URL,
+            apiKey: "$LILAC_API_KEY",
+            api: "openai-completions",
+            models: applyDiscounts(buildModels(staleBase, customModels, patches), latestDiscounts),
           });
         }
-      });
+
+        if (model?.provider === "lilac") {
+          ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(model.id)));
+        }
+      }).catch(() => { /* network errors are non-fatal */ });
     });
+  });
+
+  pi.on("turn_end", async (_event, ctx) => {
+    if (!ctx.model || ctx.model.provider !== "lilac" || !latestDiscounts) return;
+    const discount = latestDiscounts.get(ctx.model.id);
+    if (!discount) return;
+    pi.appendEntry(DISCOUNT_ENTRY_TYPE, {
+      modelId: ctx.model.id,
+      supplyState: discount.supplyState,
+      discountPercent: discount.discountPercent,
+      creditMultiplier: discount.creditMultiplier,
+    } as DiscountEntry);
+  });
+
+  pi.on("before_provider_request", async (_event, ctx) => {
+    if (ctx.model?.provider !== "lilac") return;
+
+    // Always show status for active lilac model
+    ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(ctx.model.id)));
+
+    if (!cachedApiKey) return;
+
+    const now = Date.now();
+    if (latestDiscounts && now - lastDiscountFetchTime < STATUS_CACHE_TTL_MS) {
+      return;
+    }
+
+    const discounts = await fetchStatusDiscounts(cachedApiKey);
+    if (!discounts) return;
+    if (!discountsChanged(latestDiscounts, discounts)) {
+      lastDiscountFetchTime = now;
+      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(ctx.model.id)));
+      return;
+    }
+
+    lastDiscountFetchTime = now;
+    cacheDiscounts(discounts);
+    latestDiscounts = discounts;
+
+    const base = loadStaleModels(embeddedModels);
+    pi.registerProvider("lilac", {
+      baseUrl: BASE_URL,
+      apiKey: "$LILAC_API_KEY",
+      api: "openai-completions",
+      models: applyDiscounts(buildModels(base, customModels, patches), discounts),
+    });
+    ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(ctx.model.id)));
+  });
+
+  pi.on("model_select", async (event, ctx) => {
+    if (event.model.provider === "lilac") {
+      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(event.model.id)));
+    } else {
+      ctx.ui.setStatus("lilac", undefined);
+    }
+  });
+
+  pi.on("session_tree", async (_event, ctx) => {
+    replayDiscountEvents(ctx);
+    const model = ctx.model;
+    if (model?.provider === "lilac") {
+      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(model.id)));
+    }
   });
 
   pi.on("session_shutdown", () => {
     revalidateAbort?.abort();
   });
 }
+
+export { fetchStatusDiscounts, applyDiscounts, loadCachedDiscounts, cacheDiscounts };
+export type { JsonDiscount, JsonModel, PatchEntry, PatchData };
