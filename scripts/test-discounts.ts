@@ -376,6 +376,76 @@ assert(
   "known model restores full discount status",
 );
 
+// ─── Test 11: re-register stability ───────────────────────────────────────────
+
+console.log("\n--- Test 11: re-register stability ---");
+
+// Simulate multiple rapid re-registers (e.g. before_provider_request fires
+// right after session_start's background fetch completes). Each re-register
+// should produce a clean model list — no duplicates, no missing models.
+//
+// In pi's real runtime:
+//   1. pi captures state.model (old object) for the in-flight stream
+//   2. before_provider_request re-registers (creates new model objects in registry)
+//   3. _refreshCurrentModelFromRegistry updates state.model to the new object
+//   4. the in-flight stream still uses the old model reference for cost calc
+//   5. the next turn picks up the new model with updated costs
+//
+// So re-registering never corrupts an in-flight request — the stream holds
+// its own model reference. We verify the provider produces a stable model list
+// across successive re-registers.
+
+const modelIdsAfterSignup = updatedProvider.config.models.map((m: any) => m.id).sort();
+
+// Build fresh model list with known LIST prices for cost verification
+const freshModels = updatedProvider.config.models.map((m: any) => ({
+  ...m,
+  cost: { input: 0.70, output: 3.50, cacheRead: 0.20, cacheWrite: 0 },
+  discount: undefined,
+}));
+
+// Re-register with changed discounts
+const changedDiscounts = new Map([
+  ["moonshotai/kimi-k2.6", { supplyState: "low", discountPercent: 10, creditMultiplier: 0.90 }],
+]);
+
+const reRegisterModels = applyDiscounts(freshModels, changedDiscounts);
+mockApi.registerProvider("lilac", {
+  baseUrl: "https://api.getlilac.com/v1",
+  apiKey: "$LILAC_API_KEY",
+  api: "openai-completions",
+  models: reRegisterModels,
+});
+const afterFirst = providers[providers.length - 1];
+const modelIdsAfterFirst = afterFirst.config.models.map((m: any) => m.id).sort();
+assert(modelIdsAfterFirst.length === modelIdsAfterSignup.length, "model count preserved after re-register");
+assert(JSON.stringify(modelIdsAfterFirst) === JSON.stringify(modelIdsAfterSignup), "model IDs stable after re-register");
+
+// Re-register again with original discounts (simulates rapid successive updates)
+// Use the same discount data that session_start fetched (which includes kimi at 25%)
+const sessionDiscounts = new Map([
+  ["moonshotai/kimi-k2.6", { supplyState: "healthy", discountPercent: 25, creditMultiplier: 0.75 }],
+]);
+const reRegisterModels2 = applyDiscounts(
+  freshModels.map((m: any) => ({ ...m, discount: undefined })),
+  sessionDiscounts,
+);
+mockApi.registerProvider("lilac", {
+  baseUrl: "https://api.getlilac.com/v1",
+  apiKey: "$LILAC_API_KEY",
+  api: "openai-completions",
+  models: reRegisterModels2,
+});
+const afterSecond = providers[providers.length - 1];
+const modelIdsAfterSecond = afterSecond.config.models.map((m: any) => m.id).sort();
+assert(modelIdsAfterSecond.length === modelIdsAfterSignup.length, "model count preserved after second re-register");
+assert(JSON.stringify(modelIdsAfterSecond) === JSON.stringify(modelIdsAfterSignup), "model IDs stable after second re-register");
+
+// Verify the costs reflect the LATEST registration (not stale from an earlier one)
+const kimiFinal = afterSecond.config.models.find((m: any) => m.id === "moonshotai/kimi-k2.6");
+assert(kimiFinal.discount.discountPercent === 25, "final registration uses correct discount (not stale from first re-register)");
+assert(kimiFinal.cost.input === 0.525, "final registration uses correct cost (0.70 * 0.75)");
+
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 
 globalThis.fetch = originalFetch;
