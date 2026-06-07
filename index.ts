@@ -28,13 +28,12 @@
  *   - vLLM's streaming parser intermittently omits `delta.tool_calls` when the
  *     model decides to call tools, finishing with `finish_reason: "tool_calls"` but
  *     an empty delta. Even with `tool_stream: true` set via `zaiToolStream`, this
- *     can still occur intermittently. Two defenses: `before_provider_request` ensures
- *     `tool_stream: true` is always in the payload; `message_end` converts the
+ *     can still occur intermittently. The `message_end` handler converts the
  *     resulting `stopReason: "toolUse"` with zero toolCall blocks into a retryable
  *     error (matching pi's auto-retry pattern) so the agent re-prompts automatically.
  *   - GLM's chat template does not handle the `developer` role — prompts sent
  *     with `role: "developer"` are silently dropped. `supportsDeveloperRole: false`
- *     forces pi to use `role: "system"` instead.
+ *     in models.json forces pi to use `role: "system"` instead.
  *   - On current vLLM builds, disabling reasoning may still leak chain-of-thought
  *     into `content` terminated by a ``` marker. Clients that require
  *     hard-suppressed output should post-process accordingly.
@@ -613,24 +612,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   // vLLM's streaming parser intermittently emits finish_reason: "tool_calls" without
-  // any delta.tool_calls chunks — even with tool_stream: true. Pi maps that to
-  // stopReason: "toolUse" but there are zero toolCall blocks to execute, so the
-  // agent loop ends with nothing to do ("abrupt stop"). Two defenses:
-  //
-  // 1. before_provider_request: ensure tool_stream: true is always in the payload
-  //    as a belt-and-suspenders for the compat flag.
-  // 2. message_end: detect stopReason: "toolUse" with zero toolCall blocks and
-  //    convert to a retryable error so pi's auto-retry mechanism re-prompts the agent.
-  pi.on("before_provider_request", async (event, bctx) => {
-    const payload = event.payload;
-    if (bctx.model?.provider !== "lilac") return;
-    if (bctx.model?.id !== "zai-org/glm-5.1") return;
-    if (!payload?.tools?.length) return;
-    if (!payload.tool_stream) {
-      payload.tool_stream = true;
-    }
-  });
-
+  // any delta.tool_calls chunks — even with tool_stream: true (set via zaiToolStream
+  // in compat). Pi maps that to stopReason: "toolUse" but there are zero toolCall
+  // blocks to execute, so the agent loop ends with nothing to do ("abrupt stop").
+  // The message_end handler converts this to a retryable error so pi's auto-retry
+  // mechanism re-prompts the agent.
   pi.on("message_end", async (event, mctx) => {
     const message = event.message;
     if (message.role !== "assistant") return;

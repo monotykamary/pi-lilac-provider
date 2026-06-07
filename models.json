@@ -16,10 +16,11 @@
     "contextWindow": 262144,
     "maxTokens": 262144,
     "compat": {
-      "supportsDeveloperRole": true,
+      "supportsDeveloperRole": false,
       "supportsStore": false,
       "maxTokensField": "max_completion_tokens",
-      "thinkingFormat": "qwen-chat-template"
+      "thinkingFormat": "qwen-chat-template",
+      "zaiToolStream": true
     }
   },
   {
@@ -38,10 +39,11 @@
     "contextWindow": 202752,
     "maxTokens": 131072,
     "compat": {
-      "supportsDeveloperRole": true,
+      "supportsDeveloperRole": false,
       "supportsStore": false,
       "maxTokensField": "max_completion_tokens",
-      "thinkingFormat": "qwen-chat-template"
+      "thinkingFormat": "qwen-chat-template",
+      "zaiToolStream": true
     }
   },
   {
@@ -61,10 +63,11 @@
     "contextWindow": 262144,
     "maxTokens": 262144,
     "compat": {
-      "supportsDeveloperRole": true,
+      "supportsDeveloperRole": false,
       "supportsStore": false,
       "maxTokensField": "max_completion_tokens",
-      "thinkingFormat": "qwen-chat-template"
+      "thinkingFormat": "qwen-chat-template",
+      "zaiToolStream": true
     }
   }
 ]
