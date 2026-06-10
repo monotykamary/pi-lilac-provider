@@ -69,5 +69,27 @@
       "thinkingFormat": "qwen-chat-template",
       "zaiToolStream": true
     }
+  },
+  {
+    "id": "minimaxai/minimax-m2.7",
+    "name": "MiniMax M2.7",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0.06,
+      "cacheWrite": 0
+    },
+    "contextWindow": 204800,
+    "maxTokens": 204800,
+    "compat": {
+      "supportsDeveloperRole": true,
+      "supportsStore": false,
+      "maxTokensField": "max_completion_tokens",
+      "thinkingFormat": "qwen-chat-template"
+    }
   }
 ]
