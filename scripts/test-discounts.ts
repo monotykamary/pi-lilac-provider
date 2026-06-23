@@ -286,7 +286,7 @@ for (const handler of handlers.get("model_select") || []) {
       previousModel: undefined,
       source: "set",
     },
-    { ui: mockUi }
+    { ui: mockUi, model: { id: "moonshotai/kimi-k2.6", provider: "lilac" } }
   );
 }
 assert(statuses.get("lilac") === "supply: healthy · sub-discount: 25%", "model_select keeps status for lilac model");
@@ -302,7 +302,7 @@ for (const handler of handlers.get("model_select") || []) {
       previousModel: undefined,
       source: "set",
     },
-    { ui: mockUi }
+    { ui: mockUi, model: { id: "claude-sonnet-4", provider: "anthropic" } }
   );
 }
 assert(statuses.get("lilac") === undefined, "model_select clears status for non-lilac model");
@@ -359,7 +359,7 @@ for (const handler of handlers.get("model_select") || []) {
       previousModel: undefined,
       source: "set",
     },
-    { ui: mockUi },
+    { ui: mockUi, model: { id: "some/unknown-model", provider: "lilac" } },
   );
 }
 assert(statuses.get("lilac") === "supply: —", "unknown model shows fallback dash");
@@ -373,7 +373,7 @@ for (const handler of handlers.get("model_select") || []) {
       previousModel: undefined,
       source: "set",
     },
-    { ui: mockUi },
+    { ui: mockUi, model: { id: "moonshotai/kimi-k2.6", provider: "lilac" } },
   );
 }
 assert(
@@ -540,6 +540,162 @@ assert(boundModel === boundRef, "handler did not replace the bound model object 
 assert(boundModel.cost.input === 0.525, "bound model cost mutated in place to 0.70 * 0.75 = 0.525");
 assert(boundModel.cost.output === 2.625, "bound model output mutated to 3.50 * 0.75 = 2.625");
 assert(boundModel.cost.cacheRead === 0.15, "bound model cacheRead mutated to 0.20 * 0.75 = 0.15");
+
+// ─── Test 14: session_start clears status after switch during fetch ─────────
+
+console.log("\n--- Test 14: session_start clears status after switch ---");
+
+// Regression: the session_start background fetch resolves up to ~8s after hook
+// start. If the user switches to a non-lilac model during that window, the
+// deferred callback must NOT re-paint the stale captured lilac model's discount
+// over the clear that model_select issued. syncStatus() reads the LIVE ctx.model
+// (a lazy getter in production), so mutating startCtx.model mid-flight mimics
+// the session model changing and the deferred paint clears instead.
+globalThis.fetch = mockFetch({
+  "/models": { body: { data: [] } }, // no live models → liveModels null
+  "/status": {
+    body: {
+      models: [{
+        id: "moonshotai/kimi-k2.6",
+        current_subscription_supply_state: "healthy",
+        current_subscription_discount_percent: 25,
+        current_subscription_credit_multiplier: "0.75",
+      }],
+    },
+  },
+}) as any;
+
+statuses.clear();
+const startCtx: any = {
+  modelRegistry: mockRegistry,
+  ui: mockUi,
+  model: { id: "moonshotai/kimi-k2.6", provider: "lilac" }, // start on lilac
+  sessionManager: { getBranch: () => [] },
+};
+for (const handler of handlers.get("session_start") || []) {
+  await handler({}, startCtx);
+}
+// Immediate paint reflects the lilac model (still selected at hook start).
+assert(
+  statuses.get("lilac") === "supply: healthy · sub-discount: 25%",
+  "immediate session_start paint shows lilac discount",
+);
+
+// While the background fetch is in flight, the user switches to a non-lilac model.
+startCtx.model = { id: "claude-sonnet-4", provider: "anthropic" };
+
+// Flush the deferred .then() chain (resolveApiKey → fetch → syncStatus).
+await new Promise((r) => setTimeout(r, 100));
+
+assert(
+  statuses.get("lilac") === undefined,
+  "deferred session_start clears status after switch to non-lilac (no stale re-paint)",
+);
+
+// ─── Test 15: before_provider_request clears status after switch ─────────────
+
+console.log("\n--- Test 15: before_provider_request clears status after switch ---");
+
+// Regression: every 30s (when the discount TTL expires) before_provider_request
+// awaits a fresh /status fetch. If the user switches to a non-lilac model during
+// that await, the post-await paint must clear (live model) instead of re-painting
+// the stale captured in-flight lilac model. Cost mutation still targets the
+// captured in-flight model (Tests 12-13); only the DISPLAY follows the live model.
+
+// Force the 30s TTL to look expired so the fetch path executes.
+const realDateNow = Date.now;
+Date.now = () => realDateNow.call(Date) + 60000;
+try {
+  globalThis.fetch = mockFetch({
+    "/status": {
+      body: {
+        // CHANGED discount (low/10%) vs the cached healthy/25% → exercises the
+        // registerProvider + syncStatus path, not just the unchanged early-return.
+        models: [{
+          id: "moonshotai/kimi-k2.6",
+          current_subscription_supply_state: "low",
+          current_subscription_discount_percent: 10,
+          current_subscription_credit_multiplier: "0.90",
+        }],
+      },
+    },
+  }) as any;
+
+  statuses.clear();
+  // Live model holder; reassigning .model mid-await mimics ctx.model being a
+  // lazy getter to the session model.
+  const bprCtx: any = {
+    ui: mockUi,
+    model: { id: "moonshotai/kimi-k2.6", provider: "lilac" },
+  };
+
+  // Kick off before_provider_request; it captures inFlightModel=lilac, mutates
+  // cost, paints, then awaits the fetch (TTL expired).
+  const bprPromise = (async () => {
+    for (const handler of handlers.get("before_provider_request") || []) {
+      await handler({ type: "before_provider_request", payload: {} }, bprCtx);
+    }
+  })();
+
+  // Switch to non-lilac while the fetch is in flight (before the await resumes).
+  bprCtx.model = { id: "claude-sonnet-4", provider: "anthropic" };
+
+  await bprPromise;
+
+  assert(
+    statuses.get("lilac") === undefined,
+    "post-await syncStatus clears after switch to non-lilac (no stale re-paint)",
+  );
+} finally {
+  Date.now = realDateNow;
+}
+
+// ─── Test 16: session_start shows new lilac model after switch ───────────────
+
+console.log("\n--- Test 16: session_start shows new lilac model after switch ---");
+
+// Companion to Test 14: switching to a DIFFERENT lilac model during the fetch
+// must paint the NEW model's discount, proving syncStatus reads the live model
+// (not a stale capture that would show the old model's discount).
+globalThis.fetch = mockFetch({
+  "/models": { body: { data: [] } },
+  "/status": {
+    body: {
+      models: [
+        {
+          id: "moonshotai/kimi-k2.6",
+          current_subscription_supply_state: "healthy",
+          current_subscription_discount_percent: 25,
+          current_subscription_credit_multiplier: "0.75",
+        },
+        {
+          id: "zai-org/glm-5.1",
+          current_subscription_supply_state: "high",
+          current_subscription_discount_percent: 50,
+          current_subscription_credit_multiplier: "0.50",
+        },
+      ],
+    },
+  },
+}) as any;
+
+statuses.clear();
+const startCtx2: any = {
+  modelRegistry: mockRegistry,
+  ui: mockUi,
+  model: { id: "moonshotai/kimi-k2.6", provider: "lilac" }, // start on kimi
+  sessionManager: { getBranch: () => [] },
+};
+for (const handler of handlers.get("session_start") || []) {
+  await handler({}, startCtx2);
+}
+// Switch to a different lilac model (glm) during the in-flight fetch.
+startCtx2.model = { id: "zai-org/glm-5.1", provider: "lilac" };
+await new Promise((r) => setTimeout(r, 100));
+assert(
+  statuses.get("lilac") === "supply: high · sub-discount: 50%",
+  "deferred session_start paints the NEW lilac model's discount (glm), not the stale kimi capture",
+);
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 

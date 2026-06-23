@@ -479,6 +479,41 @@ function dimStatus(ctx: any, text: string): string {
   }
 }
 
+/**
+ * Paint the footer status from the LIVE session model — the single source of
+ * truth for the display. ctx.model is a lazy getter (not a snapshot), so this
+ * reflects the currently-selected model even when called from a deferred
+ * post-await callback that captured a different (stale) model at hook start.
+ *
+ * Set for lilac models, cleared for everything else. Every status paint site
+ * calls this, so whichever handler runs last wins — including after a switch
+ * to a non-lilac model, fixing a race where deferred post-await setStatus()
+ * calls re-painted a stale captured lilac model's discount over the clear
+ * that model_select had just issued.
+ *
+ * Only the DISPLAY follows the live model. Cost mutation (applyDiscountInPlace)
+ * and registerProvider() in before_provider_request still target the turn's
+ * captured in-flight model — that's the object pi bound and whose .cost
+ * calculateCost() reads, and it may legitimately differ from the live model
+ * after a mid-turn /model switch.
+ *
+ * Wrapped in try/catch: ctx.model / ctx.ui assert the extension runner is
+ * still active and throw if the session ended mid-fetch, so a late deferred
+ * callback after session_shutdown no-ops instead of throwing.
+ */
+function syncStatus(ctx: any): void {
+  try {
+    const model = ctx.model;
+    if (model?.provider === "lilac") {
+      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(model.id)));
+    } else {
+      ctx.ui.setStatus("lilac", undefined);
+    }
+  } catch {
+    // Runner stale (session ended mid-fetch) — nothing to paint.
+  }
+}
+
 function discountsChanged(
   a: Map<string, JsonDiscount> | null,
   b: Map<string, JsonDiscount> | null,
@@ -572,11 +607,10 @@ export default function (pi: ExtensionAPI) {
     // Replay persisted discount state from session JSONL (synchronous, zero-latency)
     replayDiscountEvents(ctx);
 
-    // Show status immediately with replayed/cached data — don't block pi startup
-    const model = ctx.model;
-    if (model?.provider === "lilac") {
-      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(model.id)));
-    }
+    // Show status immediately with replayed/cached data — don't block pi startup.
+    // syncStatus reads the LIVE ctx.model so a switch away from lilac before the
+    // background fetch resolves never leaves a stale discount painted.
+    syncStatus(ctx);
 
     // Fire-and-forget: resolve API key, then fetch live data in background.
     // Provider and status are hot-swapped when results arrive.
@@ -613,9 +647,10 @@ export default function (pi: ExtensionAPI) {
           });
         }
 
-        if (model?.provider === "lilac") {
-          ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(model.id)));
-        }
+        // Re-paint from the LIVE model: if the user switched to a non-lilac
+        // model (or a different lilac model) during the fetch, this reflects
+        // the new selection instead of re-showing the stale captured model.
+        syncStatus(ctx);
       }).catch(() => { /* network errors are non-fatal */ });
     });
   });
@@ -652,7 +687,10 @@ export default function (pi: ExtensionAPI) {
     // returned unchanged) and recomputes from list price so it never compounds
     // a previously-applied factor.
     applyDiscountInPlace(inFlightModel, listModels, latestDiscounts);
-    ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(inFlightModel.id)));
+    // Display follows the LIVE model (clears if the user switched away during
+    // this turn); the cost mutation above still targets the captured in-flight
+    // model pi bound for this turn.
+    syncStatus(ctx);
 
     if (!cachedApiKey) return;
 
@@ -667,7 +705,7 @@ export default function (pi: ExtensionAPI) {
     lastDiscountFetchTime = now;
 
     if (!discountsChanged(latestDiscounts, discounts)) {
-      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(inFlightModel.id)));
+      syncStatus(ctx);
       return;
     }
 
@@ -687,23 +725,22 @@ export default function (pi: ExtensionAPI) {
       api: "openai-completions",
       models: applyDiscounts(freshList, discounts),
     });
-    ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(inFlightModel.id)));
+    // Display reflects the LIVE model: post-await the user may have switched to
+    // a non-lilac model, so syncStatus clears instead of re-painting the stale
+    // captured in-flight lilac model's discount.
+    syncStatus(ctx);
   });
 
-  pi.on("model_select", async (event, ctx) => {
-    if (event.model.provider === "lilac") {
-      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(event.model.id)));
-    } else {
-      ctx.ui.setStatus("lilac", undefined);
-    }
+  pi.on("model_select", async (_event, ctx) => {
+    // ctx.model is the live session model (pi sets state.model before emitting
+    // this event), so syncStatus paints/clears consistently with every other
+    // handler — one source of truth for the footer.
+    syncStatus(ctx);
   });
 
   pi.on("session_tree", async (_event, ctx) => {
     replayDiscountEvents(ctx);
-    const model = ctx.model;
-    if (model?.provider === "lilac") {
-      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(model.id)));
-    }
+    syncStatus(ctx);
   });
 
   // vLLM's streaming parser intermittently emits finish_reason: "tool_calls" without
