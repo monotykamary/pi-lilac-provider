@@ -304,6 +304,8 @@ function cacheModels(models: JsonModel[]): void {
   } catch {
     // Cache write failure is non-fatal
   }
+  // Base model set changed; force getListModels() to rebuild list prices.
+  listModelsCache = null;
 }
 
 function mergeWithEmbedded(liveModels: JsonModel[], embeddedModels: JsonModel[]): JsonModel[] {
@@ -398,6 +400,41 @@ function applyDiscounts(models: JsonModel[], discounts: Map<string, JsonDiscount
   });
 }
 
+/**
+ * Apply the current discount to a single model's cost IN PLACE.
+ *
+ * applyDiscounts() returns discounted COPIES for the registry; those copies
+ * cannot reach the model pi already bound for the current turn. This mutates
+ * that bound object directly so the current turn's calculateCost() (in pi-ai)
+ * reads the discounted price. Cost is always recomputed from list price — the
+ * patch-applied, pre-discount value from buildModels() — so re-applying a
+ * changed discount never compounds a factor already present on the object.
+ * cacheWrite is left untouched (Lilac does not discount it, matching
+ * applyDiscounts).
+ *
+ * Targets the object pi bound for the turn, captured before any await or
+ * registerProvider() call. registerProvider() refreshes the session model for
+ * SUBSEQUENT turns only (via prepareNextTurn); it cannot affect the current
+ * turn's cost calc, which is why the in-place mutation is required.
+ */
+function applyDiscountInPlace(
+  model: { id: string; cost: { input: number; output: number; cacheRead: number; cacheWrite: number } } | undefined,
+  listModels: JsonModel[],
+  discounts: Map<string, JsonDiscount> | null,
+): void {
+  if (!model?.cost) return;
+  const list = listModels.find(m => m.id === model.id);
+  if (!list) return;
+  // A missing discount entry means list price (factor 1) — e.g. a model whose
+  // discount was removed since it was last priced.
+  const rawFactor = discounts?.get(model.id)?.creditMultiplier;
+  const factor = Number.isFinite(rawFactor) && rawFactor !== undefined ? rawFactor : 1;
+  const applyFactor = (n: number) => n > 0 ? Math.round(n * factor * 10000) / 10000 : n;
+  model.cost.input = applyFactor(list.cost.input);
+  model.cost.output = applyFactor(list.cost.output);
+  model.cost.cacheRead = applyFactor(list.cost.cacheRead);
+}
+
 function cacheDiscounts(discounts: Map<string, JsonDiscount>): void {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -467,6 +504,10 @@ let revalidateAbort: AbortController | null = null;
 let latestDiscounts: Map<string, JsonDiscount> | null = null;
 let lastDiscountFetchTime = 0;
 const STATUS_CACHE_TTL_MS = 30000;
+// List-price (patch-applied, pre-discount) models, cached until the base set
+// changes. Reset in cacheModels() so the next getListModels() rebuilds from the
+// refreshed disk cache / embedded set.
+let listModelsCache: JsonModel[] | null = null;
 
 async function resolveApiKey(modelRegistry: ModelRegistry): Promise<void> {
   cachedApiKey = await modelRegistry.getApiKeyForProvider("lilac") ?? undefined;
@@ -478,6 +519,16 @@ export default function (pi: ExtensionAPI) {
   const embeddedModels = modelsData as JsonModel[];
   const customModels = customModelsData as JsonModel[];
   const patches = patchData as PatchData;
+
+  // List-price models (patch applied, pre-discount), cached at module scope and
+  // rebuilt only when the base set changes (see cacheModels). Used to recompute
+  // the in-flight model's cost without compounding an already-applied discount.
+  function getListModels(): JsonModel[] {
+    if (!listModelsCache) {
+      listModelsCache = buildModels(loadStaleModels(embeddedModels), customModels, patches);
+    }
+    return listModelsCache;
+  }
 
   const staleBase = loadStaleModels(embeddedModels);
   latestDiscounts = loadCachedDiscounts();
@@ -582,10 +633,26 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("before_provider_request", async (_event, ctx) => {
-    if (ctx.model?.provider !== "lilac") return;
+    // Capture the in-flight model BEFORE any await or registerProvider() call.
+    // ctx.model is a lazy getter to the live session model; at hook start (before
+    // any refresh) it is the same object pi's agent loop bound as the model for
+    // THIS turn — the exact object whose .cost calculateCost() reads when the
+    // response arrives. registerProvider() can only refresh the session model
+    // for SUBSEQUENT turns (prepareNextTurn), so to affect the current turn's
+    // cost we mutate this object in place. Capturing before the await also guards
+    // against a concurrent session_start /status sync swapping the reference
+    // mid-hook.
+    const inFlightModel = ctx.model;
+    if (!inFlightModel || inFlightModel.provider !== "lilac") return;
 
-    // Always show status for active lilac model
-    ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(ctx.model.id)));
+    const listModels = getListModels();
+
+    // Align the in-flight model with the best-known discount right away. This
+    // covers turns that don't trigger a fresh fetch (within TTL, or the fetch
+    // returned unchanged) and recomputes from list price so it never compounds
+    // a previously-applied factor.
+    applyDiscountInPlace(inFlightModel, listModels, latestDiscounts);
+    ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(inFlightModel.id)));
 
     if (!cachedApiKey) return;
 
@@ -596,24 +663,31 @@ export default function (pi: ExtensionAPI) {
 
     const discounts = await fetchStatusDiscounts(cachedApiKey);
     if (!discounts) return;
+
+    lastDiscountFetchTime = now;
+
     if (!discountsChanged(latestDiscounts, discounts)) {
-      lastDiscountFetchTime = now;
-      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(ctx.model.id)));
+      ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(inFlightModel.id)));
       return;
     }
 
-    lastDiscountFetchTime = now;
     cacheDiscounts(discounts);
     latestDiscounts = discounts;
 
-    const base = loadStaleModels(embeddedModels);
+    // Re-read list prices in case a concurrent /models sync (session_start)
+    // invalidated the list-price cache during the await above. Then re-apply the
+    // freshly-fetched discount so THIS turn (not just later ones) is costed at
+    // the new price, and re-register so other lilac models pick it up on their
+    // next request.
+    const freshList = getListModels();
+    applyDiscountInPlace(inFlightModel, freshList, discounts);
     pi.registerProvider("lilac", {
       baseUrl: BASE_URL,
       apiKey: "$LILAC_API_KEY",
       api: "openai-completions",
-      models: applyDiscounts(buildModels(base, customModels, patches), discounts),
+      models: applyDiscounts(freshList, discounts),
     });
-    ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(ctx.model.id)));
+    ctx.ui.setStatus("lilac", dimStatus(ctx, formatDiscountStatus(inFlightModel.id)));
   });
 
   pi.on("model_select", async (event, ctx) => {
@@ -668,5 +742,5 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-export { fetchStatusDiscounts, applyDiscounts, loadCachedDiscounts, cacheDiscounts };
+export { fetchStatusDiscounts, applyDiscounts, applyDiscountInPlace, loadCachedDiscounts, cacheDiscounts };
 export type { JsonDiscount, JsonModel, PatchEntry, PatchData };

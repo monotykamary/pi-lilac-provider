@@ -13,6 +13,10 @@
  * 7. turn_end appends discount entry to session JSONL.
  * 8. before_provider_request refreshes discounts with a 30s cache.
  * 9. formatDiscountStatus returns fallbacks when data is missing.
+ * 10. applyDiscountInPlace mutates the in-flight model's cost in place,
+ *     recomputed from list price so re-applied discounts never compound.
+ * 11. before_provider_request mutates the bound (in-flight) model object so the
+ *     current turn's cost calc sees the discount in real time.
  */
 
 import type { ExtensionAPI, ModelRegistry } from "@earendil-works/pi-coding-agent";
@@ -43,6 +47,7 @@ const {
   default: registerLilac,
   fetchStatusDiscounts,
   applyDiscounts,
+  applyDiscountInPlace,
   loadCachedDiscounts,
   cacheDiscounts,
 } = await import("../index.ts");
@@ -445,6 +450,96 @@ assert(JSON.stringify(modelIdsAfterSecond) === JSON.stringify(modelIdsAfterSignu
 const kimiFinal = afterSecond.config.models.find((m: any) => m.id === "moonshotai/kimi-k2.6");
 assert(kimiFinal.discount.discountPercent === 25, "final registration uses correct discount (not stale from first re-register)");
 assert(kimiFinal.cost.input === 0.525, "final registration uses correct cost (0.70 * 0.75)");
+
+// ─── Test 12: applyDiscountInPlace mutates the in-flight model ───────────────
+
+console.log("\n--- Test 12: applyDiscountInPlace (in-flight mutation) ---");
+
+// applyDiscountInPlace closes the one-turn gap: registerProvider() refreshes
+// the registry for LATER turns, but the model pi already bound for the current
+// turn is a separate object whose .cost calculateCost() reads. We mutate THAT
+// object in place, recomputed from list price so a changed discount never
+// compounds on top of an already-applied factor.
+
+const listModels = [
+  { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6", cost: { input: 0.70, output: 3.50, cacheRead: 0.20, cacheWrite: 0 } },
+] as any[];
+
+// A model object that is "already bound" for the turn — the same reference pi's
+// agent loop holds. It currently carries an OLD discount (factor 0.75).
+const inFlight = {
+  id: "moonshotai/kimi-k2.6",
+  cost: { input: 0.525, output: 2.625, cacheRead: 0.15, cacheWrite: 0 },
+};
+const inFlightRef = inFlight;
+
+// New discount: factor 0.50 (changed). Must recompute from LIST price (0.70),
+// NOT compound on top of the already-applied 0.75 (which would give 0.2625).
+const newDiscounts = new Map([
+  ["moonshotai/kimi-k2.6", { supplyState: "high", discountPercent: 50, creditMultiplier: 0.50 }],
+]);
+applyDiscountInPlace(inFlight, listModels, newDiscounts);
+assert(inFlight === inFlightRef, "mutates the same object in place (no new object created)");
+assert(inFlight.cost.input === 0.35, "recomputed from list price: 0.70 * 0.50 = 0.35 (not compounded 0.2625)");
+assert(inFlight.cost.output === 1.75, "output = 3.50 * 0.50 = 1.75");
+assert(inFlight.cost.cacheRead === 0.1, "cacheRead = 0.20 * 0.50 = 0.1");
+assert(inFlight.cost.cacheWrite === 0, "cacheWrite left untouched (Lilac does not discount it)");
+
+// Idempotency + no-compounding: applying the same factor again yields the same
+// values (always recomputed from list price, never compounding).
+applyDiscountInPlace(inFlight, listModels, newDiscounts);
+assert(inFlight.cost.input === 0.35, "re-applying same factor is idempotent (no compounding)");
+
+// Discount removed (model no longer in /status) → reverts to list price.
+const emptyDiscounts = new Map();
+applyDiscountInPlace(inFlight, listModels, emptyDiscounts);
+assert(inFlight.cost.input === 0.70, "removed discount reverts to list price (factor 1)");
+assert(inFlight.cost.output === 3.50, "removed discount: output reverts to list price");
+
+// null discounts → list price, no throw.
+applyDiscountInPlace(inFlight, listModels, null);
+assert(inFlight.cost.input === 0.70, "null discounts → list price");
+
+// Unknown model id (not in listModels) → no-op, no throw.
+const unknown = { id: "some/unknown-model", cost: { input: 9.99, output: 9.99, cacheRead: 9.99, cacheWrite: 0 } };
+applyDiscountInPlace(unknown, listModels, newDiscounts);
+assert(unknown.cost.input === 9.99, "unknown model id → no mutation (no list-price match)");
+
+// undefined model → no throw.
+applyDiscountInPlace(undefined, listModels, newDiscounts);
+assert(true, "undefined model does not throw");
+
+// ─── Test 13: before_provider_request mutates the bound (in-flight) model ────
+
+console.log("\n--- Test 13: before_provider_request mutates the bound model ---");
+
+// Simulate the object pi's agent loop bound for the turn. It holds an OUTDATED
+// cost (list price, as if no discount had been applied yet). This same reference
+// is what calculateCost() reads for the current turn — so the handler MUST mutate
+// it in place, not replace it. latestDiscounts currently holds kimi at 0.75 (from
+// Test 4), and the TTL is fresh, so the handler takes the within-TTL path (which
+// previously did NOT touch the in-flight model at all).
+const boundModel = {
+  id: "moonshotai/kimi-k2.6",
+  provider: "lilac",
+  cost: { input: 0.70, output: 3.50, cacheRead: 0.20, cacheWrite: 0 }, // list price (stale)
+};
+const boundRef = boundModel;
+
+for (const handler of handlers.get("before_provider_request") || []) {
+  await handler(
+    { type: "before_provider_request", payload: {} },
+    {
+      ui: mockUi,
+      model: boundModel,
+    }
+  );
+}
+
+assert(boundModel === boundRef, "handler did not replace the bound model object (same reference)");
+assert(boundModel.cost.input === 0.525, "bound model cost mutated in place to 0.70 * 0.75 = 0.525");
+assert(boundModel.cost.output === 2.625, "bound model output mutated to 3.50 * 0.75 = 2.625");
+assert(boundModel.cost.cacheRead === 0.15, "bound model cacheRead mutated to 0.20 * 0.75 = 0.15");
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 
