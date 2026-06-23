@@ -77,7 +77,7 @@ pi
 | GLM 5.2 | 524K | ❌ | ✅ | $0.90 | $0.27 | $3.00 |
 | Kimi K2.6 | 262K | ✅ | ✅ | $0.70 | $0.20 | $3.50 |
 | MiniMax M2.7 | 205K | ❌ | ✅ | $0.30 | $0.06 | $1.20 |
-| MiniMax M3 | 1.0M | ❌ | ✅ | $0.28 | $0.05 | $1.10 |
+| MiniMax M3 | 1.0M | ✅ | ✅ | $0.28 | $0.05 | $1.10 |
 
 *Costs are per million tokens. Prices subject to change — check [getlilac.com](https://getlilac.com/) for current pricing.*
 
