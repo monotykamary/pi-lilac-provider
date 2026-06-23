@@ -86,6 +86,19 @@ interface JsonDiscount {
   creditMultiplier: number;
 }
 
+// Maps pi's thinking levels (off, minimal, low, medium, high, xhigh) to the
+// provider-specific effort string sent on the wire. A `null` value marks a
+// level as unsupported — clampThinkingLevel skips it when resolving the
+// user's selection. Mirrors pi-ai's ThinkingLevelMap shape.
+type ThinkingLevelMap = {
+  off?: string | null;
+  minimal?: string | null;
+  low?: string | null;
+  medium?: string | null;
+  high?: string | null;
+  xhigh?: string | null;
+};
+
 interface JsonModel {
   id: string;
   name: string;
@@ -99,6 +112,7 @@ interface JsonModel {
   };
   contextWindow: number;
   maxTokens: number;
+  thinkingLevelMap?: ThinkingLevelMap;
   compat?: {
     supportsDeveloperRole?: boolean;
     supportsStore?: boolean;
@@ -121,6 +135,7 @@ interface PatchEntry {
   };
   contextWindow?: number;
   maxTokens?: number;
+  thinkingLevelMap?: ThinkingLevelMap;
   compat?: Record<string, unknown>;
 }
 
@@ -148,9 +163,15 @@ function applyPatch(model: JsonModel, patch: PatchEntry): JsonModel {
   if (patch.compat) {
     result.compat = { ...(result.compat || {}), ...patch.compat };
   }
+  if (patch.thinkingLevelMap !== undefined) {
+    result.thinkingLevelMap = patch.thinkingLevelMap;
+  }
 
   if (!result.reasoning && result.compat?.thinkingFormat) {
     delete result.compat.thinkingFormat;
+  }
+  if (!result.reasoning && result.thinkingLevelMap) {
+    delete result.thinkingLevelMap;
   }
   if (result.compat && Object.keys(result.compat).length === 0) {
     delete result.compat;

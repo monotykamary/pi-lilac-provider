@@ -31,6 +31,16 @@
       "supportsReasoningEffort": true
     }
   },
+  "zai-org/glm-5.2": {
+    "thinkingLevelMap": {
+      "off": "minimal",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": "max"
+    }
+  },
   "google/gemma-4-31b-it": {
     "reasoning": true,
     "cost": {
