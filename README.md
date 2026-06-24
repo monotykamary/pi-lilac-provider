@@ -115,14 +115,18 @@ model's chat template honors differs per family. The provider uses pi's
 | GLM 5.2 | `enable_thinking` (bool) + `reasoning_effort` (`max`\|`high`) | on (`max`) |
 | Gemma 4 | `enable_thinking` (bool) | off |
 | MiniMax M2.7 | `thinking` + `enable_thinking` (bool) | on |
-| MiniMax M3 | `thinking_mode` (`adaptive`\|`enabled`\|`disabled`) | adaptive |
+| MiniMax M3 | `thinking_mode` (`disabled`\|`adaptive`\|`enabled`) | adaptive (server) |
 
 Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7 use the forward-compatible form
 that sends **both** `thinking` and `enable_thinking`, so whichever key the
 template honors is set. GLM 5.2 additionally maps pi's thinking levels to
 `reasoning_effort` (`high` = lower-latency, `xhigh` = `max`). MiniMax M3 uses
-the `thinking_mode` enum (off → `disabled`, any thinking level → `enabled`); its
-`adaptive` "model decides" default is not exposed through pi's off/on toggle.
+the `thinking_mode` enum, exposed as three pi thinking levels: `off` →
+`disabled` (never think), `minimal` → `adaptive` (the model decides), `high` →
+`enabled` (always think). Pi starts at `off` (`disabled`); cycle to `minimal`
+for M3's adaptive "model decides" mode. (The selector/footer show pi's level
+names — `minimal`/`high` — not the `thinking_mode` values; pi has no per-model
+level-relabel hook.)
 
 In pi, reasoning models automatically use the appropriate thinking format. Use
 Shift+Tab to control thinking level.

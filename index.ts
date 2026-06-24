@@ -14,7 +14,7 @@
  *   - GLM 5.2:      honors `enable_thinking` (bool) + `reasoning_effort` (max|high). ON by default.
  *   - Gemma 4:      honors `enable_thinking` (bool). OFF by default.
  *   - MiniMax M2.7: forward-compatible `thinking` + `enable_thinking` (bool).
- *   - MiniMax M3:   honors `thinking_mode` (adaptive|enabled|disabled); bool keys ignored.
+ *   - MiniMax M3:   honors `thinking_mode` (disabled|adaptive|enabled); bool keys ignored.
  *
  * We use pi's `chat-template` thinkingFormat (NOT `qwen-chat-template`, which
  * sends only `enable_thinking` + `preserve_thinking` and is ignored by Kimi and
@@ -22,9 +22,11 @@
  * `enable_thinking` so whichever key the template honors is set:
  *   { chat_template_kwargs: { thinking: <bool>, enable_thinking: <bool> } }
  * GLM 5.2 adds `reasoning_effort` (high = lower-latency, xhigh = max) via a
- * thinkingLevelMap. MiniMax M3 maps to the `thinking_mode` enum (off→disabled,
- * any thinking level→enabled), so its adaptive "model decides" default is not
- * exposed through pi's off/on toggle.
+ * thinkingLevelMap. MiniMax M3 maps to the `thinking_mode` enum as three pi
+ * thinking levels — off→disabled, minimal→adaptive (model decides), high→enabled
+ * — so adaptive is selectable via pi's Shift+Tab cycle (off→minimal→high). Pi
+ * shows the pi level names (minimal/high) in the selector/footer, not the
+ * thinking_mode values; there's no per-model level-relabel hook.
  *
  * Key API notes:
  *   - Uses `max_completion_tokens` (preferred for reasoning models)

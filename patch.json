@@ -90,11 +90,11 @@
     },
     "thinkingLevelMap": {
       "off": "disabled",
-      "minimal": "enabled",
-      "low": "enabled",
-      "medium": "enabled",
+      "minimal": "adaptive",
+      "low": null,
+      "medium": null,
       "high": "enabled",
-      "xhigh": "enabled"
+      "xhigh": null
     }
   }
 }
