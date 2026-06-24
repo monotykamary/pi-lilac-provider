@@ -5,14 +5,26 @@
  * Base URL: https://api.getlilac.com/v1
  *
  * Lilac serves models via a customized fork of vLLM tuned for idle-GPU scheduling
- * and shared warm endpoints. All models use chat_template_kwargs to toggle reasoning:
+ * and shared warm endpoints. Reasoning is toggled via chat_template_kwargs, but
+ * the key each model's chat template honors differs per family, so per-model
+ * chatTemplateKwargs are configured in patch.json:
  *
- *   - Kimi K2.6: reasoning ON by default, honors `thinking` key
- *   - GLM 5.1:   reasoning ON by default, honors `enable_thinking` key
- *   - Gemma 4:   reasoning OFF by default, honors `enable_thinking` key
+ *   - Kimi K2.6:    honors `thinking` (bool); `enable_thinking` ignored. ON by default.
+ *   - GLM 5.1:      honors `enable_thinking` (bool). ON by default.
+ *   - GLM 5.2:      honors `enable_thinking` (bool) + `reasoning_effort` (max|high). ON by default.
+ *   - Gemma 4:      honors `enable_thinking` (bool). OFF by default.
+ *   - MiniMax M2.7: forward-compatible `thinking` + `enable_thinking` (bool).
+ *   - MiniMax M3:   honors `thinking_mode` (adaptive|enabled|disabled); bool keys ignored.
  *
- * The forward-compatible approach is to send both `thinking` and `enable_thinking`
- * in chat_template_kwargs — pi's `qwen-chat-template` thinkingFormat does this.
+ * We use pi's `chat-template` thinkingFormat (NOT `qwen-chat-template`, which
+ * sends only `enable_thinking` + `preserve_thinking` and is ignored by Kimi and
+ * MiniMax M3). The forward-compatible form sends BOTH `thinking` and
+ * `enable_thinking` so whichever key the template honors is set:
+ *   { chat_template_kwargs: { thinking: <bool>, enable_thinking: <bool> } }
+ * GLM 5.2 adds `reasoning_effort` (high = lower-latency, xhigh = max) via a
+ * thinkingLevelMap. MiniMax M3 maps to the `thinking_mode` enum (off→disabled,
+ * any thinking level→enabled), so its adaptive "model decides" default is not
+ * exposed through pi's off/on toggle.
  *
  * Key API notes:
  *   - Uses `max_completion_tokens` (preferred for reasoning models)
@@ -99,6 +111,17 @@ type ThinkingLevelMap = {
   xhigh?: string | null;
 };
 
+// A chat_template_kwargs value, mirroring pi-ai's ChatTemplateKwargSchema. Scalar
+// values are passed through verbatim; { $var } values are resolved by pi-ai from
+// the turn's thinking state ("thinking.enabled" → bool, "thinking.effort" → the
+// mapped effort string). omitWhenOff drops the key entirely when thinking is off.
+type ChatTemplateKwargValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { $var: "thinking.enabled" | "thinking.effort"; omitWhenOff?: boolean };
+
 interface JsonModel {
   id: string;
   name: string;
@@ -117,7 +140,19 @@ interface JsonModel {
     supportsDeveloperRole?: boolean;
     supportsStore?: boolean;
     maxTokensField?: "max_completion_tokens" | "max_tokens";
-    thinkingFormat?: "openai" | "zai" | "qwen" | "qwen-chat-template";
+    thinkingFormat?:
+      | "openai"
+      | "openrouter"
+      | "together"
+      | "deepseek"
+      | "zai"
+      | "qwen"
+      | "chat-template"
+      | "qwen-chat-template"
+      | "string-thinking"
+      | "ant-ling";
+    chatTemplateKwargs?: Record<string, ChatTemplateKwargValue>;
+    zaiToolStream?: boolean;
     supportsReasoningEffort?: boolean;
   };
   discount?: JsonDiscount;
@@ -252,14 +287,21 @@ function transformApiModel(apiModel: any): JsonModel | null {
     maxTokens: apiModel.top_provider?.max_completion_tokens || apiModel.context_length || 131072,
   };
 
-  // All Lilac models use chat_template_kwargs for reasoning toggle
+  // All Lilac models toggle reasoning via chat_template_kwargs, but the key each
+  // model's chat template honors differs per family. Default newly discovered
+  // models to the forward-compatible both-keys form (works across all current
+  // Lilac templates); per-model overrides in patch.json refine this — e.g. GLM
+  // 5.2 adds reasoning_effort, MiniMax M3 uses the thinking_mode enum.
   if (features.includes("reasoning")) {
     model.compat = {
       supportsDeveloperRole: true,
       supportsStore: false,
       maxTokensField: "max_completion_tokens",
-      thinkingFormat: "qwen-chat-template",
-      supportsReasoningEffort: true,
+      thinkingFormat: "chat-template",
+      chatTemplateKwargs: {
+        thinking: { $var: "thinking.enabled" },
+        enable_thinking: { $var: "thinking.enabled" },
+      },
     };
   } else {
     model.compat = {

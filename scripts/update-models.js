@@ -147,7 +147,11 @@ function transformApiModel(apiModel, existingModelsMap) {
     maxTokens: apiModel.top_provider?.max_completion_tokens || apiModel.context_length || 131072,
   };
 
-  // Add compat — all Lilac models use chat_template_kwargs for reasoning toggle
+  // Add compat — all Lilac models toggle reasoning via chat_template_kwargs, but
+  // the honored key differs per model family. Default newly discovered models to
+  // the forward-compatible both-keys form (works across all current Lilac
+  // templates); refine per-model in patch.json (e.g. GLM 5.2 adds reasoning_effort,
+  // MiniMax M3 uses the thinking_mode enum).
   const compat = {
     supportsDeveloperRole: true,
     supportsStore: false,
@@ -155,7 +159,11 @@ function transformApiModel(apiModel, existingModelsMap) {
   };
 
   if (hasReasoning) {
-    compat.thinkingFormat = 'qwen-chat-template';
+    compat.thinkingFormat = 'chat-template';
+    compat.chatTemplateKwargs = {
+      thinking: { $var: 'thinking.enabled' },
+      enable_thinking: { $var: 'thinking.enabled' },
+    };
   }
 
   model.compat = compat;

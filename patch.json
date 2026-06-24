@@ -7,11 +7,14 @@
       "cacheRead": 0.20
     },
     "compat": {
-      "thinkingFormat": "qwen-chat-template",
+      "thinkingFormat": "chat-template",
+      "chatTemplateKwargs": {
+        "thinking": { "$var": "thinking.enabled" },
+        "enable_thinking": { "$var": "thinking.enabled" }
+      },
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": false,
-      "supportsStore": false,
-      "supportsReasoningEffort": true
+      "supportsStore": false
     }
   },
   "zai-org/glm-5.1": {
@@ -23,20 +26,29 @@
       "cacheRead": 0.27
     },
     "compat": {
-      "thinkingFormat": "qwen-chat-template",
+      "thinkingFormat": "chat-template",
+      "chatTemplateKwargs": {
+        "thinking": { "$var": "thinking.enabled" },
+        "enable_thinking": { "$var": "thinking.enabled" }
+      },
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": false,
       "supportsStore": false,
-      "zaiToolStream": true,
-      "supportsReasoningEffort": true
+      "zaiToolStream": true
     }
   },
   "zai-org/glm-5.2": {
+    "compat": {
+      "thinkingFormat": "chat-template",
+      "chatTemplateKwargs": {
+        "enable_thinking": { "$var": "thinking.enabled" },
+        "reasoning_effort": { "$var": "thinking.effort", "omitWhenOff": true }
+      }
+    },
     "thinkingLevelMap": {
-      "off": "minimal",
       "minimal": null,
-      "low": null,
-      "medium": null,
+      "low": "high",
+      "medium": "high",
       "high": "high",
       "xhigh": "max"
     }
@@ -49,16 +61,40 @@
       "cacheRead": 0
     },
     "compat": {
-      "thinkingFormat": "qwen-chat-template",
+      "thinkingFormat": "chat-template",
+      "chatTemplateKwargs": {
+        "thinking": { "$var": "thinking.enabled" },
+        "enable_thinking": { "$var": "thinking.enabled" }
+      },
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": true,
-      "supportsStore": false,
-      "supportsReasoningEffort": true
+      "supportsStore": false
     }
   },
   "minimaxai/minimax-m2.7": {
     "compat": {
+      "thinkingFormat": "chat-template",
+      "chatTemplateKwargs": {
+        "thinking": { "$var": "thinking.enabled" },
+        "enable_thinking": { "$var": "thinking.enabled" }
+      },
       "supportsDeveloperRole": false
+    }
+  },
+  "minimaxai/minimax-m3": {
+    "compat": {
+      "thinkingFormat": "chat-template",
+      "chatTemplateKwargs": {
+        "thinking_mode": { "$var": "thinking.effort" }
+      }
+    },
+    "thinkingLevelMap": {
+      "off": "disabled",
+      "minimal": "enabled",
+      "low": "enabled",
+      "medium": "enabled",
+      "high": "enabled",
+      "xhigh": "enabled"
     }
   }
 }

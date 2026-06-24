@@ -103,13 +103,29 @@ pi --provider lilac --model moonshotai/kimi-k2.6
 
 ### Thinking Mode
 
-All Lilac models support chain-of-thought reasoning via `chat_template_kwargs`. Pi uses the `qwen-chat-template` thinking format to send both `thinking` and `enable_thinking` keys, which works across all model families:
+All Lilac models toggle reasoning via `chat_template_kwargs`, but the key each
+model's chat template honors differs per family. The provider uses pi's
+`chat-template` thinkingFormat with per-model `chatTemplateKwargs` (configured in
+`patch.json`) so the right key reaches each template:
 
-- **Kimi K2.6**: Honors `thinking` key (Moonshot template)
-- **GLM 5.1**: Honors `enable_thinking` key (Z.ai template)
-- **Gemma 4**: Honors `enable_thinking` key (Google template)
+| Model | Reasoning key | Default |
+|-------|---------------|---------|
+| Kimi K2.6 | `thinking` (bool) | on |
+| GLM 5.1 | `enable_thinking` (bool) | on |
+| GLM 5.2 | `enable_thinking` (bool) + `reasoning_effort` (`max`\|`high`) | on (`max`) |
+| Gemma 4 | `enable_thinking` (bool) | off |
+| MiniMax M2.7 | `thinking` + `enable_thinking` (bool) | on |
+| MiniMax M3 | `thinking_mode` (`adaptive`\|`enabled`\|`disabled`) | adaptive |
 
-In pi, reasoning models automatically use the appropriate thinking format. Use Shift+Tab to control thinking level.
+Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7 use the forward-compatible form
+that sends **both** `thinking` and `enable_thinking`, so whichever key the
+template honors is set. GLM 5.2 additionally maps pi's thinking levels to
+`reasoning_effort` (`high` = lower-latency, `xhigh` = `max`). MiniMax M3 uses
+the `thinking_mode` enum (off → `disabled`, any thinking level → `enabled`); its
+`adaptive` "model decides" default is not exposed through pi's off/on toggle.
+
+In pi, reasoning models automatically use the appropriate thinking format. Use
+Shift+Tab to control thinking level.
 
 ### Vision
 
@@ -153,7 +169,7 @@ Add to your pi configuration for automatic loading:
 
 Lilac's API is OpenAI-compatible with these specifics:
 
-- **`thinkingFormat: "qwen-chat-template"`** — All reasoning models. Lilac uses `chat_template_kwargs` (with `thinking` and `enable_thinking` keys) to toggle reasoning. Pi sends both keys for forward compatibility.
+- **`thinkingFormat: "chat-template"`** — All reasoning models. Lilac's vLLM backend toggles reasoning via `chat_template_kwargs`, but the honored key differs per model family. Per-model `chatTemplateKwargs` in `patch.json` send the right key(s): `thinking`+`enable_thinking` (bool) for Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7; `enable_thinking` + `reasoning_effort` for GLM 5.2; `thinking_mode` (adaptive|enabled|disabled) for MiniMax M3.
 - **`maxTokensField: "max_completion_tokens"`** — All models. Lilac supports `max_completion_tokens` (preferred for reasoning models as it includes reasoning tokens).
 - **`supportsDeveloperRole: true`** — All models. Lilac's vLLM backend maps the developer role to system.
 - **`supportsStore: false`** — All models. Lilac doesn't support the `store` parameter.
