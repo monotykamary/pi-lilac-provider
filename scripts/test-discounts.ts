@@ -11,12 +11,14 @@
  * 5. session_start replays persisted discount events and sets footer status.
  * 6. model_select sets/clears footer status for lilac/non-lilac models.
  * 7. turn_end appends discount entry to session JSONL.
- * 8. before_provider_request refreshes discounts with a 30s cache.
+ * 8. before_provider_request refreshes discounts with a 60s cache.
  * 9. formatDiscountStatus returns fallbacks when data is missing.
  * 10. applyDiscountInPlace mutates the in-flight model's cost in place,
  *     recomputed from list price so re-applied discounts never compound.
  * 11. before_provider_request mutates the bound (in-flight) model object so the
  *     current turn's cost calc sees the discount in real time.
+ * 12. session_start schedules a 10-minute background /status poll to cover idle
+ *     sessions; session_shutdown clears it.
  */
 
 import type { ExtensionAPI, ModelRegistry } from "@earendil-works/pi-coding-agent";
@@ -596,15 +598,16 @@ assert(
 
 console.log("\n--- Test 15: before_provider_request clears status after switch ---");
 
-// Regression: every 30s (when the discount TTL expires) before_provider_request
+// Regression: every 60s (when the discount TTL expires) before_provider_request
 // awaits a fresh /status fetch. If the user switches to a non-lilac model during
 // that await, the post-await paint must clear (live model) instead of re-painting
 // the stale captured in-flight lilac model. Cost mutation still targets the
 // captured in-flight model (Tests 12-13); only the DISPLAY follows the live model.
 
-// Force the 30s TTL to look expired so the fetch path executes.
+// Force the 60s TTL to look expired so the fetch path executes. Offset 120s for
+// a clear 2x margin over the 60s TTL (the original used 60s over a 30s TTL).
 const realDateNow = Date.now;
-Date.now = () => realDateNow.call(Date) + 60000;
+Date.now = () => realDateNow.call(Date) + 120000;
 try {
   globalThis.fetch = mockFetch({
     "/status": {
@@ -696,6 +699,86 @@ assert(
   statuses.get("lilac") === "supply: high · sub-discount: 50%",
   "deferred session_start paints the NEW lilac model's discount (glm), not the stale kimi capture",
 );
+
+// ─── Test 17: session_start schedules a 10-min idle poll; shutdown clears it ─
+
+console.log("\n--- Test 17: session_start schedules idle poll; session_shutdown clears it ---");
+
+// Lilac refreshes discounts ~every 10 minutes. session_start must schedule a
+// background /status poll at that cadence to cover idle sessions (turn fetches
+// only run when the user sends a message), and session_shutdown must clear it so
+// it neither leaks nor keeps the process alive. Wrap the global timer APIs to
+// capture the scheduled delay + handle, then confirm shutdown clears it.
+
+const realSetInterval = globalThis.setInterval.bind(globalThis);
+const realClearInterval = globalThis.clearInterval.bind(globalThis);
+let scheduledDelay: number | null = null;
+let scheduledHandle: ReturnType<typeof setInterval> | null = null;
+const clearedHandles = new Set<ReturnType<typeof setInterval>>();
+
+globalThis.setInterval = ((fn: (...args: any[]) => void, delay?: number, ...rest: any[]) => {
+  scheduledDelay = delay ?? null;
+  const h = realSetInterval(fn, delay as any, ...rest);
+  scheduledHandle = h;
+  return h;
+}) as any;
+globalThis.clearInterval = ((handle: ReturnType<typeof setInterval>) => {
+  clearedHandles.add(handle);
+  return realClearInterval(handle);
+}) as any;
+
+try {
+  // Benign fetch mock so the session_start fire-and-forget /models + /status
+  // fetch doesn't hit the network. (The poll itself never fires — 10 min — so
+  // only the startup fetch needs mocking here.)
+  globalThis.fetch = mockFetch({
+    "/models": { body: { data: [] } },
+    "/status": {
+      body: {
+        models: [
+          {
+            id: "moonshotai/kimi-k2.6",
+            current_subscription_supply_state: "healthy",
+            current_subscription_discount_percent: 25,
+            current_subscription_credit_multiplier: "0.75",
+          },
+        ],
+      },
+    },
+  }) as any;
+
+  const pollCtx: any = {
+    modelRegistry: mockRegistry,
+    ui: mockUi,
+    model: { id: "moonshotai/kimi-k2.6", provider: "lilac" },
+    sessionManager: { getBranch: () => [] },
+  };
+
+  for (const handler of handlers.get("session_start") || []) {
+    await handler({}, pollCtx);
+  }
+
+  assert(
+    scheduledDelay === 10 * 60 * 1000,
+    "session_start schedules a 10-minute (600000ms) /status poll for idle sessions",
+  );
+  assert(scheduledHandle !== null, "poll interval handle was captured");
+  const capturedHandle = scheduledHandle;
+
+  for (const handler of handlers.get("session_shutdown") || []) {
+    await handler({}, pollCtx);
+  }
+
+  assert(
+    capturedHandle !== null && clearedHandles.has(capturedHandle),
+    "session_shutdown clears the scheduled poll interval (no leak / process-hang)",
+  );
+} finally {
+  // Restore globals; clear any interval this test scheduled before it can fire.
+  if (scheduledHandle) realClearInterval(scheduledHandle);
+  globalThis.setInterval = realSetInterval as any;
+  globalThis.clearInterval = realClearInterval as any;
+}
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 

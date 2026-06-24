@@ -538,7 +538,19 @@ let cachedApiKey: string | undefined;
 let revalidateAbort: AbortController | null = null;
 let latestDiscounts: Map<string, JsonDiscount> | null = null;
 let lastDiscountFetchTime = 0;
-const STATUS_CACHE_TTL_MS = 30000;
+// Turn-initiated /status fetches are throttled to once per TTL window so a burst
+// of messages doesn't hammer the endpoint. Background polling (see
+// STATUS_POLL_INTERVAL_MS) and turn fetches both stamp lastDiscountFetchTime, so
+// they cooperate: a poll that just ran lets the next turn skip its own fetch
+// within the TTL.
+const STATUS_CACHE_TTL_MS = 60000;
+// Lilac refreshes discounts ~every 10 minutes (per their docs: "Discounts refresh
+// approximately every 10 minutes and are locked in when a request starts"). Poll
+// on that cadence during idle so a long-idle session still catches supply/sub
+// changes without waiting for the user to send a message — turn fetches alone
+// only refresh on a user message and are TTL-throttled to 1/min.
+const STATUS_POLL_INTERVAL_MS = 10 * 60 * 1000;
+let pollInterval: ReturnType<typeof setInterval> | null = null;
 // List-price (patch-applied, pre-discount) models, cached until the base set
 // changes. Reset in cacheModels() so the next getListModels() rebuilds from the
 // refreshed disk cache / embedded set.
@@ -599,10 +611,48 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  /**
+   * Background /status poll, fired every STATUS_POLL_INTERVAL_MS (10 min) from
+   * session_start to cover idle sessions. Mirrors the discount half of
+   * before_provider_request, but without an in-flight turn model to mutate: it
+   * only refreshes latestDiscounts, re-registers (so the next turn's models carry
+   * the new price), and re-paints the footer from the LIVE model. Passes the
+   * session AbortSignal so the fetch dies on session_shutdown or a subsequent
+   * session_start; bails on a missing API key or an aborted signal.
+   */
+  function pollStatusDiscounts(ctx: any, signal: AbortSignal): void {
+    if (signal.aborted || !cachedApiKey) return;
+    fetchStatusDiscounts(cachedApiKey, signal).then(discounts => {
+      if (signal.aborted || !discounts) return;
+      lastDiscountFetchTime = Date.now();
+      if (!discountsChanged(latestDiscounts, discounts)) {
+        syncStatus(ctx);
+        return;
+      }
+      cacheDiscounts(discounts);
+      latestDiscounts = discounts;
+      const freshList = getListModels();
+      pi.registerProvider("lilac", {
+        baseUrl: BASE_URL,
+        apiKey: "$LILAC_API_KEY",
+        api: "openai-completions",
+        models: applyDiscounts(freshList, discounts),
+      });
+      syncStatus(ctx);
+    }).catch(() => { /* network errors are non-fatal */ });
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     revalidateAbort?.abort();
     revalidateAbort = new AbortController();
     const signal = revalidateAbort.signal;
+
+    // Tear down any poll interval left from a prior session before starting a
+    // fresh one (defensive; session_shutdown normally handles this).
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
 
     // Replay persisted discount state from session JSONL (synchronous, zero-latency)
     replayDiscountEvents(ctx);
@@ -653,6 +703,15 @@ export default function (pi: ExtensionAPI) {
         syncStatus(ctx);
       }).catch(() => { /* network errors are non-fatal */ });
     });
+
+    // Background poll for idle sessions: Lilac refreshes discounts ~every 10
+    // minutes, so poll on that cadence to catch supply/sub changes while the
+    // user is idle (turn fetches only run when a message is sent). The callback
+    // bails on a missing API key or an aborted/shut-down session. Cleared in
+    // session_shutdown and at the top of the next session_start.
+    pollInterval = setInterval(() => pollStatusDiscounts(ctx, signal), STATUS_POLL_INTERVAL_MS);
+    // Don't keep the process alive solely for discount polling.
+    pollInterval.unref?.();
   });
 
   pi.on("turn_end", async (_event, ctx) => {
@@ -776,6 +835,10 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     revalidateAbort?.abort();
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
   });
 }
 
