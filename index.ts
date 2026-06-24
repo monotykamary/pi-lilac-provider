@@ -590,10 +590,11 @@ let lastDiscountFetchTime = 0;
 const STATUS_CACHE_TTL_MS = 60000;
 // Lilac refreshes discounts ~every 10 minutes (per their docs: "Discounts refresh
 // approximately every 10 minutes and are locked in when a request starts"). Poll
-// on that cadence during idle so a long-idle session still catches supply/sub
-// changes without waiting for the user to send a message — turn fetches alone
-// only refresh on a user message and are TTL-throttled to 1/min.
-const STATUS_POLL_INTERVAL_MS = 10 * 60 * 1000;
+// every 5 min during idle — half the refresh window — so a long-idle session
+// catches supply/sub changes within ~5 min instead of waiting up to a full
+// window. Turn fetches alone only refresh on a user message and are
+// TTL-throttled to 1/min.
+const STATUS_POLL_INTERVAL_MS = 5 * 60 * 1000;
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 // List-price (patch-applied, pre-discount) models, cached until the base set
 // changes. Reset in cacheModels() so the next getListModels() rebuilds from the
@@ -656,7 +657,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
-   * Background /status poll, fired every STATUS_POLL_INTERVAL_MS (10 min) from
+   * Background /status poll, fired every STATUS_POLL_INTERVAL_MS (5 min) from
    * session_start to cover idle sessions. Mirrors the discount half of
    * before_provider_request, but without an in-flight turn model to mutate: it
    * only refreshes latestDiscounts, re-registers (so the next turn's models carry
@@ -749,8 +750,8 @@ export default function (pi: ExtensionAPI) {
     });
 
     // Background poll for idle sessions: Lilac refreshes discounts ~every 10
-    // minutes, so poll on that cadence to catch supply/sub changes while the
-    // user is idle (turn fetches only run when a message is sent). The callback
+    // minutes, so poll every 5 min (half the refresh window) to catch supply/sub
+    // changes while the user is idle (turn fetches only run when a message is. The callback
     // bails on a missing API key or an aborted/shut-down session. Cleared in
     // session_shutdown and at the top of the next session_start.
     pollInterval = setInterval(() => pollStatusDiscounts(ctx, signal), STATUS_POLL_INTERVAL_MS);
