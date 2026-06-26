@@ -16,6 +16,7 @@
     "build": "echo 'nothing to build'",
     "check": "echo 'nothing to check'",
     "test": "node scripts/test-discounts.ts",
+    "test:thinking": "node scripts/test-preserved-thinking.ts",
     "update-models": "node scripts/update-models.js"
   },
   "keywords": [

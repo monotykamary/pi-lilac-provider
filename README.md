@@ -128,6 +128,23 @@ for M3's adaptive "model decides" mode. (The selector/footer show pi's level
 names — `minimal`/`high` — not the `thinking_mode` values; pi has no per-model
 level-relabel hook.)
 
+**Preserved thinking (full-history reasoning).** By default these templates
+trim older assistant reasoning between turns (each vendor's default), which
+degrades multi-turn recall. Three models opt into full-history preservation via
+a template flag sent alongside the reasoning key:
+
+| Model | Flag | Effect |
+|-------|------|--------|
+| Kimi K2.6 | `preserve_thinking: true` | keeps every assistant turn's reasoning (default: only the last) |
+| GLM 5.1 | `clear_thinking: false` | keeps reasoning for all turns (default: clears before the last user message) |
+| GLM 5.2 | `clear_thinking: false` | keeps reasoning for all turns (default: clears before the last user message) |
+
+Kimi K2.6 and GLM 5.2 are E2E-verified on the sibling neuralwatt provider via a
+3-turn, two-20-digit-number recall test (Kimi 0/6 → 6/6, GLM 5.2 1/4 → 4/4);
+GLM 5.1 uses the same `clear_thinking` mechanism (confirmed in its HuggingFace
+chat template). Gemma 4 and MiniMax M2.7/M3 expose no family-wide preserve flag,
+so their older assistant reasoning is trimmed per the template default.
+
 In pi, reasoning models automatically use the appropriate thinking format. Use
 Shift+Tab to control thinking level.
 
@@ -173,7 +190,7 @@ Add to your pi configuration for automatic loading:
 
 Lilac's API is OpenAI-compatible with these specifics:
 
-- **`thinkingFormat: "chat-template"`** — All reasoning models. Lilac's vLLM backend toggles reasoning via `chat_template_kwargs`, but the honored key differs per model family. Per-model `chatTemplateKwargs` in `patch.json` send the right key(s): `thinking`+`enable_thinking` (bool) for Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7; `enable_thinking` + `reasoning_effort` for GLM 5.2; `thinking_mode` (adaptive|enabled|disabled) for MiniMax M3.
+- **`thinkingFormat: "chat-template"`** — All reasoning models. Lilac's vLLM backend toggles reasoning via `chat_template_kwargs`, but the honored key differs per model family. Per-model `chatTemplateKwargs` in `patch.json` send the right key(s): `thinking`+`enable_thinking` (bool) for Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7; `enable_thinking` + `reasoning_effort` for GLM 5.2; `thinking_mode` (adaptive|enabled|disabled) for MiniMax M3. Kimi K2.6, GLM 5.1, and GLM 5.2 additionally send a preservation flag (`preserve_thinking: true` / `clear_thinking: false`) to retain full reasoning history across turns — see [Preserved thinking](#thinking-mode) above.
 - **`maxTokensField: "max_completion_tokens"`** — All models. Lilac supports `max_completion_tokens` (preferred for reasoning models as it includes reasoning tokens).
 - **`supportsDeveloperRole: true`** — All models. Lilac's vLLM backend maps the developer role to system.
 - **`supportsStore: false`** — All models. Lilac doesn't support the `store` parameter.

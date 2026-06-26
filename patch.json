@@ -10,7 +10,8 @@
       "thinkingFormat": "chat-template",
       "chatTemplateKwargs": {
         "thinking": { "$var": "thinking.enabled" },
-        "enable_thinking": { "$var": "thinking.enabled" }
+        "enable_thinking": { "$var": "thinking.enabled" },
+        "preserve_thinking": true
       },
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": false,
@@ -29,7 +30,8 @@
       "thinkingFormat": "chat-template",
       "chatTemplateKwargs": {
         "thinking": { "$var": "thinking.enabled" },
-        "enable_thinking": { "$var": "thinking.enabled" }
+        "enable_thinking": { "$var": "thinking.enabled" },
+        "clear_thinking": false
       },
       "maxTokensField": "max_completion_tokens",
       "supportsDeveloperRole": false,
@@ -42,7 +44,8 @@
       "thinkingFormat": "chat-template",
       "chatTemplateKwargs": {
         "enable_thinking": { "$var": "thinking.enabled" },
-        "reasoning_effort": { "$var": "thinking.effort", "omitWhenOff": true }
+        "reasoning_effort": { "$var": "thinking.effort", "omitWhenOff": true },
+        "clear_thinking": false
       }
     },
     "thinkingLevelMap": {
