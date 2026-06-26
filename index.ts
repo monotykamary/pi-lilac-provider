@@ -178,6 +178,120 @@ interface PatchEntry {
 
 type PatchData = Record<string, PatchEntry>;
 
+// User Configuration: ~/.pi/agent/extensions/lilac.json lets a user override model
+// properties per id ON TOP of patch.json + custom-models.json (so they win).
+// Recursively deep-merges `compat` (incl. nested `chatTemplateKwargs`),
+// `thinkingLevelMap`, and `cost` (toggle one flag without redeclaring the rest),
+// replaces scalars and arrays. Lets a user toggle chat_template_kwargs (e.g.
+// preserve_thinking / clear_thinking) or a single thinking level without editing
+// the extension. See README "Model Overrides".
+interface ModelOverride {
+  thinkingLevelMap?: ThinkingLevelMap;
+  compat?: Record<string, unknown>;
+}
+
+interface LilacConfig {
+  modelOverrides?: Record<string, ModelOverride>;
+}
+
+const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "lilac.json");
+const DEFAULT_CONFIG: LilacConfig = { modelOverrides: {} };
+
+// Validate user-supplied modelOverrides from the config file. Non-object ids and
+// non-object overrides are dropped silently so a malformed file doesn't crash
+// model registration.
+function parseModelOverrides(raw: unknown): Record<string, ModelOverride> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const result: Record<string, ModelOverride> = {};
+  for (const [id, override] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof id !== "string" || !override || typeof override !== "object" || Array.isArray(override)) continue;
+    const o = override as Record<string, unknown>;
+    const parsed: ModelOverride = {};
+    if (o.thinkingLevelMap && typeof o.thinkingLevelMap === "object") {
+      const m: Record<string, string | null> = {};
+      for (const [k, v] of Object.entries(o.thinkingLevelMap as Record<string, unknown>)) {
+        if (v === null || typeof v === "string") m[k] = v;
+      }
+      if (Object.keys(m).length > 0) parsed.thinkingLevelMap = m as ThinkingLevelMap;
+    }
+    if (o.compat && typeof o.compat === "object") parsed.compat = o.compat as Record<string, unknown>;
+    if (Object.keys(parsed).length > 0) result[id] = parsed;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+// Reads ~/.pi/agent/extensions/lilac.json. Missing file → populate with defaults
+// so the user can discover it, then return defaults. An existing-but-invalid file
+// is left untouched (defaults returned) so a user's typo isn't silently wiped —
+// they fix the file and restart pi. Loaded lazily on first use (not at import) so
+// importing the module has no filesystem side effects and unit tests can import
+// the pure helpers safely.
+function loadConfig(): LilacConfig {
+  let rawText: string;
+  try {
+    rawText = fs.readFileSync(CONFIG_PATH, "utf8");
+  } catch {
+    try {
+      fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n");
+    } catch {
+      // Write failure is non-fatal — defaults still work in memory
+    }
+    return { ...DEFAULT_CONFIG };
+  }
+  try {
+    const raw = JSON.parse(rawText);
+    return { modelOverrides: parseModelOverrides(raw.modelOverrides) };
+  } catch {
+    // File exists but is invalid JSON — return defaults WITHOUT overwriting.
+    return { ...DEFAULT_CONFIG };
+  }
+}
+
+// Recursively deep-merge `override` into `base`. Plain objects are merged
+// key-by-key (so a user can toggle a single chatTemplateKwargs flag without
+// redeclaring the rest, and a single compat flag without redeclaring
+// chatTemplateKwargs); arrays and non-plain-object values replace the base value
+// (so an overridden { $var } schema object, or an `input` array, replaces wholesale).
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function deepMerge<T>(base: T, override: unknown): T {
+  if (!isPlainObject(override) || !isPlainObject(base)) return override as T;
+  const result: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(override)) {
+    result[k] = isPlainObject(v) && isPlainObject(result[k]) ? deepMerge(result[k], v) : v;
+  }
+  return result as T;
+}
+
+// Apply a user-supplied modelOverride (from lilac.json) on top of a built model.
+// Recursively deep-merges compat (incl. nested chatTemplateKwargs) /
+// thinkingLevelMap / cost so a user can toggle a single flag (e.g.
+// chatTemplateKwargs.preserve_thinking) without redeclaring the rest; replaces
+// scalars and arrays. No reasoning-cleanup (unlike applyPatch) — the override is
+// authoritative.
+function applyModelOverride(model: JsonModel, override: ModelOverride): JsonModel {
+  const result = { ...model };
+  for (const [key, value] of Object.entries(override)) {
+    (result as any)[key] = isPlainObject(value) && isPlainObject((result as any)[key])
+      ? deepMerge((result as any)[key], value)
+      : value;
+  }
+  return result;
+}
+
+let config: LilacConfig | undefined;
+function getConfig(): LilacConfig {
+  if (!config) config = loadConfig();
+  return config;
+}
+
+function activeOverrides(): Record<string, ModelOverride> {
+  return getConfig().modelOverrides ?? {};
+}
+
 // ─── Patch Application ────────────────────────────────────────────────────────
 
 function applyPatch(model: JsonModel, patch: PatchEntry): JsonModel {
@@ -217,8 +331,13 @@ function applyPatch(model: JsonModel, patch: PatchEntry): JsonModel {
   return result;
 }
 
-/** Full pipeline: base models → patch → custom → result */
-function buildModels(base: JsonModel[], custom: JsonModel[], patch: PatchData): JsonModel[] {
+/** Full pipeline: base models → patch → custom → user modelOverrides → result */
+function buildModels(
+  base: JsonModel[],
+  custom: JsonModel[],
+  patch: PatchData,
+  overrides: Record<string, ModelOverride> = {},
+): JsonModel[] {
   const modelMap = new Map<string, JsonModel>();
 
   for (const model of base) {
@@ -243,6 +362,18 @@ function buildModels(base: JsonModel[], custom: JsonModel[], patch: PatchData): 
       modelMap.set(model.id, applyPatch(model, patchEntry));
     } else {
       modelMap.set(model.id, model);
+    }
+  }
+
+  // User-supplied modelOverrides (from ~/.pi/agent/extensions/lilac.json) applied
+  // LAST so they win over patch.json + custom-models.json. Recursively deep-merges
+  // compat (incl. chatTemplateKwargs) / thinkingLevelMap / cost so a user can
+  // toggle a single flag (e.g. chatTemplateKwargs.preserve_thinking) without
+  // redeclaring the rest.
+  for (const [id, override] of Object.entries(overrides)) {
+    const existing = modelMap.get(id);
+    if (existing) {
+      modelMap.set(id, applyModelOverride(existing, override));
     }
   }
 
@@ -617,14 +748,14 @@ export default function (pi: ExtensionAPI) {
   // the in-flight model's cost without compounding an already-applied discount.
   function getListModels(): JsonModel[] {
     if (!listModelsCache) {
-      listModelsCache = buildModels(loadStaleModels(embeddedModels), customModels, patches);
+      listModelsCache = buildModels(loadStaleModels(embeddedModels), customModels, patches, activeOverrides());
     }
     return listModelsCache;
   }
 
   const staleBase = loadStaleModels(embeddedModels);
   latestDiscounts = loadCachedDiscounts();
-  const staleModels = applyDiscounts(buildModels(staleBase, customModels, patches), latestDiscounts);
+  const staleModels = applyDiscounts(buildModels(staleBase, customModels, patches, activeOverrides()), latestDiscounts);
 
   pi.registerProvider("lilac", {
     baseUrl: BASE_URL,
@@ -731,14 +862,14 @@ export default function (pi: ExtensionAPI) {
             baseUrl: BASE_URL,
             apiKey: "$LILAC_API_KEY",
             api: "openai-completions",
-            models: applyDiscounts(buildModels(merged, customModels, patches), latestDiscounts),
+            models: applyDiscounts(buildModels(merged, customModels, patches, activeOverrides()), latestDiscounts),
           });
         } else if (discounts) {
           pi.registerProvider("lilac", {
             baseUrl: BASE_URL,
             apiKey: "$LILAC_API_KEY",
             api: "openai-completions",
-            models: applyDiscounts(buildModels(staleBase, customModels, patches), latestDiscounts),
+            models: applyDiscounts(buildModels(staleBase, customModels, patches, activeOverrides()), latestDiscounts),
           });
         }
 
@@ -887,5 +1018,5 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-export { fetchStatusDiscounts, applyDiscounts, applyDiscountInPlace, loadCachedDiscounts, cacheDiscounts };
-export type { JsonDiscount, JsonModel, PatchEntry, PatchData };
+export { fetchStatusDiscounts, applyDiscounts, applyDiscountInPlace, loadCachedDiscounts, cacheDiscounts, buildModels, applyModelOverride, parseModelOverrides, loadConfig, getConfig };
+export type { JsonDiscount, JsonModel, PatchEntry, PatchData, ModelOverride, LilacConfig };

@@ -15,8 +15,10 @@
     "clean": "echo 'nothing to clean'",
     "build": "echo 'nothing to build'",
     "check": "echo 'nothing to check'",
-    "test": "node scripts/test-discounts.ts",
+    "test": "node scripts/test-discounts.ts && node scripts/test-preserved-thinking.ts && node scripts/test-model-overrides.ts",
+    "test:discounts": "node scripts/test-discounts.ts",
     "test:thinking": "node scripts/test-preserved-thinking.ts",
+    "test:overrides": "node scripts/test-model-overrides.ts",
     "update-models": "node scripts/update-models.js"
   },
   "keywords": [

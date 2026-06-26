@@ -190,7 +190,7 @@ Add to your pi configuration for automatic loading:
 
 Lilac's API is OpenAI-compatible with these specifics:
 
-- **`thinkingFormat: "chat-template"`** — All reasoning models. Lilac's vLLM backend toggles reasoning via `chat_template_kwargs`, but the honored key differs per model family. Per-model `chatTemplateKwargs` in `patch.json` send the right key(s): `thinking`+`enable_thinking` (bool) for Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7; `enable_thinking` + `reasoning_effort` for GLM 5.2; `thinking_mode` (adaptive|enabled|disabled) for MiniMax M3. Kimi K2.6, GLM 5.1, and GLM 5.2 additionally send a preservation flag (`preserve_thinking: true` / `clear_thinking: false`) to retain full reasoning history across turns — see [Preserved thinking](#thinking-mode) above.
+- **`thinkingFormat: "chat-template"`** — All reasoning models. Lilac's vLLM backend toggles reasoning via `chat_template_kwargs`, but the honored key differs per model family. Per-model `chatTemplateKwargs` in `patch.json` send the right key(s): `thinking`+`enable_thinking` (bool) for Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7; `enable_thinking` + `reasoning_effort` for GLM 5.2; `thinking_mode` (adaptive|enabled|disabled) for MiniMax M3. Kimi K2.6, GLM 5.1, and GLM 5.2 additionally send a preservation flag (`preserve_thinking: true` / `clear_thinking: false`) to retain full reasoning history across turns — see [Preserved thinking](#thinking-mode) above. Override these per-model via [Model Overrides](#model-overrides).
 - **`maxTokensField: "max_completion_tokens"`** — All models. Lilac supports `max_completion_tokens` (preferred for reasoning models as it includes reasoning tokens).
 - **`supportsDeveloperRole: true`** — All models. Lilac's vLLM backend maps the developer role to system.
 - **`supportsStore: false`** — All models. Lilac doesn't support the `store` parameter.
@@ -209,6 +209,27 @@ The `patch.json` file contains overrides that are applied on top of `models.json
 - Marking models as reasoning-capable when the API features list doesn't include it
 - Adding compat settings that the API doesn't provide
 - Overriding pricing when official rates change
+
+### Model Overrides
+
+`modelOverrides` lets you override compat flags and other model properties per model id, **on top of** `patch.json` + `custom-models.json`, without editing the extension. Keyed by model id; `compat` (including nested `chatTemplateKwargs`), `thinkingLevelMap`, and `cost` are deep-merged **recursively** (toggle one flag without redeclaring the rest), scalars and arrays are replaced. Applied at session start, so edits take effect on the next `pi` session.
+
+Create `~/.pi/agent/extensions/lilac.json` (auto-populated with defaults on first run):
+
+```jsonc
+{
+  "modelOverrides": {
+    // Disable full-history reasoning for kimi-k2.6 (e.g. to save tokens):
+    "moonshotai/kimi-k2.6": { "compat": { "chatTemplateKwargs": { "preserve_thinking": false } } },
+    // Toggle the GLM 5.2 clear_thinking flag without redeclaring the rest of compat:
+    "zai-org/glm-5.2": { "compat": { "chatTemplateKwargs": { "clear_thinking": true } } },
+    // Override a single thinking level without redeclaring the whole map:
+    "zai-org/glm-5.1": { "thinkingLevelMap": { "high": "max" } }
+  }
+}
+```
+
+The full set of overridable fields matches the model schema (`compat`, `thinkingLevelMap`, `cost`, `contextWindow`, `maxTokens`, `reasoning`, `input`). See [Compat Settings](#compat-settings) for the catalog of compat flags and what `chatTemplateKwargs` values mean per family. An invalid JSON file is left untouched (defaults are used) so a typo isn't silently wiped — fix the file and restart pi.
 
 ## Updating Models
 
