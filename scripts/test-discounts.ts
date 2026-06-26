@@ -17,7 +17,7 @@
  *     recomputed from list price so re-applied discounts never compound.
  * 11. before_provider_request mutates the bound (in-flight) model object so the
  *     current turn's cost calc sees the discount in real time.
- * 12. session_start schedules a 10-minute background /status poll to cover idle
+ * 12. session_start schedules a 5-minute background /status poll to cover idle
  *     sessions; session_shutdown clears it.
  */
 
@@ -700,12 +700,12 @@ assert(
   "deferred session_start paints the NEW lilac model's discount (glm), not the stale kimi capture",
 );
 
-// ─── Test 17: session_start schedules a 10-min idle poll; shutdown clears it ─
+// ─── Test 17: session_start schedules a 5-min idle poll; shutdown clears it ─
 
 console.log("\n--- Test 17: session_start schedules idle poll; session_shutdown clears it ---");
 
-// Lilac refreshes discounts ~every 10 minutes. session_start must schedule a
-// background /status poll at that cadence to cover idle sessions (turn fetches
+// Lilac refreshes discounts ~every 10 minutes, so session_start polls /status
+// every 5 min (half the refresh window) to cover idle sessions (turn fetches
 // only run when the user sends a message), and session_shutdown must clear it so
 // it neither leaks nor keeps the process alive. Wrap the global timer APIs to
 // capture the scheduled delay + handle, then confirm shutdown clears it.
@@ -729,7 +729,7 @@ globalThis.clearInterval = ((handle: ReturnType<typeof setInterval>) => {
 
 try {
   // Benign fetch mock so the session_start fire-and-forget /models + /status
-  // fetch doesn't hit the network. (The poll itself never fires — 10 min — so
+  // fetch doesn't hit the network. (The poll itself never fires — 5 min — so
   // only the startup fetch needs mocking here.)
   globalThis.fetch = mockFetch({
     "/models": { body: { data: [] } },
@@ -759,8 +759,8 @@ try {
   }
 
   assert(
-    scheduledDelay === 10 * 60 * 1000,
-    "session_start schedules a 10-minute (600000ms) /status poll for idle sessions",
+    scheduledDelay === 5 * 60 * 1000,
+    "session_start schedules a 5-minute (300000ms) /status poll for idle sessions",
   );
   assert(scheduledHandle !== null, "poll interval handle was captured");
   const capturedHandle = scheduledHandle;
