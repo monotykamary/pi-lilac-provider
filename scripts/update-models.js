@@ -55,7 +55,9 @@ function saveJson(filePath, data) {
 // Convert per-token pricing from API to per-million-tokens
 function toPerMillion(val) {
   if (val === '' || val === null || val === undefined) return null;
-  return Math.round(parseFloat(val) * 1_000_000 * 100) / 100;
+  // Round to 6 decimals of $/M: normalizes float noise from the ×1e6 multiply
+  // and preserves sub-cent cache prices like 0.003 ($/M).
+  return Math.round(parseFloat(val) * 1_000_000 * 1e6) / 1e6;
 }
 
 // ─── API fetch ───────────────────────────────────────────────────────────────

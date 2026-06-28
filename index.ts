@@ -398,8 +398,10 @@ function transformApiModel(apiModel: any): JsonModel | null {
   const hasImage = modalities.includes("image");
   const pricing = apiModel.pricing || {};
 
-  // Lilac API returns per-token pricing (e.g. "0.0000007" = $0.70/M tokens)
-  const toPerM = (v: any) => Math.round((typeof v === "string" ? parseFloat(v) : (v || 0)) * 1_000_000 * 100) / 100;
+  // Lilac API returns per-token pricing (e.g. "0.0000007" = $0.70/M tokens).
+  // Convert to $/M then round to 6 decimals: normalizes float noise from the ×1e6
+  // multiply and preserves sub-cent cache prices like 0.003 ($/M).
+  const toPerM = (v: any) => Math.round((typeof v === "string" ? parseFloat(v) : (v || 0)) * 1_000_000 * 1e6) / 1e6;
 
   const inputTypes: string[] = ["text"];
   if (hasImage) inputTypes.push("image");
@@ -561,7 +563,9 @@ function applyDiscounts(models: JsonModel[], discounts: Map<string, JsonDiscount
     // E.g. "0.75" means pay 75% of list price. For MiniMax with "1.00" there's no discount.
     // discountPercent is informational (it equals (1 - creditMultiplier) * 100).
     const factor = discount.creditMultiplier;
-    const applyFactor = (n: number) => n > 0 ? Math.round(n * factor * 10000) / 10000 : n;
+    // Round to 6 decimals of $/M so a discounted sub-cent cache price
+    // (e.g. 0.003 × 0.75 = 0.00225) survives; 4-decimal rounding trimmed it to 0.0023.
+    const applyFactor = (n: number) => n > 0 ? Math.round(n * factor * 1e6) / 1e6 : n;
     return {
       ...model,
       cost: {
@@ -604,7 +608,8 @@ function applyDiscountInPlace(
   // discount was removed since it was last priced.
   const rawFactor = discounts?.get(model.id)?.creditMultiplier;
   const factor = Number.isFinite(rawFactor) && rawFactor !== undefined ? rawFactor : 1;
-  const applyFactor = (n: number) => n > 0 ? Math.round(n * factor * 10000) / 10000 : n;
+  // Round to 6 decimals of $/M so a discounted sub-cent cache price survives.
+  const applyFactor = (n: number) => n > 0 ? Math.round(n * factor * 1e6) / 1e6 : n;
   model.cost.input = applyFactor(list.cost.input);
   model.cost.output = applyFactor(list.cost.output);
   model.cost.cacheRead = applyFactor(list.cost.cacheRead);
