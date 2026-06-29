@@ -192,10 +192,14 @@ interface ModelOverride {
 
 interface LilacConfig {
   modelOverrides?: Record<string, ModelOverride>;
+  // Flex discount threshold: only allow interactive prompts to reach the LLM
+  // when the active lilac model's discountPercent is >= this. null/undefined =
+  // off (allow all). Set via /lilac-flex; persisted in lilac.json.
+  flexThreshold?: number | null;
 }
 
 const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "lilac.json");
-const DEFAULT_CONFIG: LilacConfig = { modelOverrides: {} };
+const DEFAULT_CONFIG: LilacConfig = { modelOverrides: {}, flexThreshold: null };
 
 // Validate user-supplied modelOverrides from the config file. Non-object ids and
 // non-object overrides are dropped silently so a malformed file doesn't crash
@@ -220,6 +224,23 @@ function parseModelOverrides(raw: unknown): Record<string, ModelOverride> | unde
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+// Validate a flex discount threshold from the config file. A number in [0,100] is
+// returned as-is; null / "off" / "" map to null (flex disabled); anything else
+// returns undefined (treated as disabled by the gate, but not normalized so an
+// invalid value isn't silently rewritten). Mirrors parseModelOverrides' lenient
+// parsing so a malformed file doesn't crash the gate or model registration.
+function parseFlexThreshold(raw: unknown): number | null | undefined {
+  if (raw === null) return null;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 100) return raw;
+  if (typeof raw === "string") {
+    const s = raw.trim().toLowerCase();
+    if (s === "" || s === "off" || s === "none") return null;
+    const n = Number(s);
+    if (Number.isFinite(n) && n >= 0 && n <= 100) return n;
+  }
+  return undefined;
+}
+
 // Reads ~/.pi/agent/extensions/lilac.json. Missing file → populate with defaults
 // so the user can discover it, then return defaults. An existing-but-invalid file
 // is left untouched (defaults returned) so a user's typo isn't silently wiped —
@@ -241,7 +262,10 @@ function loadConfig(): LilacConfig {
   }
   try {
     const raw = JSON.parse(rawText);
-    return { modelOverrides: parseModelOverrides(raw.modelOverrides) };
+    return {
+      modelOverrides: parseModelOverrides(raw.modelOverrides),
+      flexThreshold: parseFlexThreshold(raw.flexThreshold),
+    };
   } catch {
     // File exists but is invalid JSON — return defaults WITHOUT overwriting.
     return { ...DEFAULT_CONFIG };
@@ -286,6 +310,29 @@ let config: LilacConfig | undefined;
 function getConfig(): LilacConfig {
   if (!config) config = loadConfig();
   return config;
+}
+
+// Read-modify-write the config file and refresh the in-memory cache. Used by
+// /lilac-flex so a threshold change takes effect immediately (the input gate and
+// footer read getConfig()) without a restart, and without clobbering the user's
+// modelOverrides. Reads via loadConfig (which validates), so modelOverrides the
+// user hand-edited since startup survive the spread. The file is normalized to a
+// discoverable shape (modelOverrides: {}, flexThreshold: null always present) so
+// /lilac-flex never strips the modelOverrides scaffold from the file.
+function updateConfig(mutator: (cfg: LilacConfig) => LilacConfig): LilacConfig {
+  const next = mutator(loadConfig());
+  const toWrite: LilacConfig = {
+    modelOverrides: next.modelOverrides ?? {},
+    flexThreshold: next.flexThreshold ?? null,
+  };
+  try {
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(toWrite, null, 2) + "\n");
+  } catch {
+    // Write failure is non-fatal — the in-memory cache below still updates.
+  }
+  config = next;
+  return next;
 }
 
 function activeOverrides(): Record<string, ModelOverride> {
@@ -656,10 +703,19 @@ function loadCachedDiscounts(): Map<string, JsonDiscount> | null {
 
 function formatDiscountStatus(modelId?: string): string {
   if (!modelId) return "supply: —";
-  if (!latestDiscounts) return "supply: checking…";
-  const discount = latestDiscounts.get(modelId);
-  if (!discount) return "supply: —";
-  return `supply: ${discount.supplyState} · sub-discount: ${discount.discountPercent}%`;
+  const threshold = getConfig().flexThreshold ?? null;
+  const discount = latestDiscounts?.get(modelId);
+  let base: string;
+  if (discount) {
+    base = `supply: ${discount.supplyState} · sub-discount: ${discount.discountPercent}%`;
+  } else if (latestDiscounts) {
+    base = "supply: —";
+  } else {
+    base = "supply: checking…";
+  }
+  if (threshold == null) return base;
+  const pct = discount?.discountPercent ?? 0;
+  return `${base} · flex ≥${threshold}% ${pct >= threshold ? "ok" : "blocked"}`;
 }
 
 function dimStatus(ctx: any, text: string): string {
@@ -705,6 +761,50 @@ function syncStatus(ctx: any): void {
   }
 }
 
+// Parse a /lilac-flex argument or custom-threshold input: "off"/"none"/"" → null
+// (disabled), a number in [0,100] (optionally with a trailing %) → that number,
+// anything else → undefined (invalid).
+function parseFlexArg(raw: string): number | null | undefined {
+  const s = raw.trim().toLowerCase().replace(/%$/, "");
+  if (s === "" || s === "off" || s === "none") return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return undefined;
+  return Math.round(n);
+}
+
+// Persist a flex threshold via updateConfig and report the resulting state against
+// the live model's current discount. The footer is re-painted (syncStatus) so the
+// flex indicator appears immediately. Used by the /lilac-flex command.
+function applyFlexThreshold(value: number | null, ctx: any): void {
+  updateConfig((cfg) => ({ ...cfg, flexThreshold: value }));
+  const threshold = getConfig().flexThreshold ?? null;
+  const model = ctx.model;
+  const discount = model?.provider === "lilac" ? latestDiscounts?.get(model.id) : undefined;
+  const pct = discount?.discountPercent;
+
+  let msg: string;
+  let level: "info" | "warning";
+  if (threshold == null) {
+    msg = "lilac-flex: off — all discounts allowed";
+    level = "info";
+  } else if (pct == null) {
+    msg = `lilac-flex: ≥ ${threshold}% — no discount data yet; will block until the next poll`;
+    level = "warning";
+  } else if (pct >= threshold) {
+    msg = `lilac-flex: ≥ ${threshold}% — current ${pct}% discount allowed`;
+    level = "info";
+  } else {
+    msg = `lilac-flex: ≥ ${threshold}% — current ${pct}% discount blocked until it improves`;
+    level = "warning";
+  }
+  try {
+    ctx.ui.notify(msg, level);
+  } catch {
+    // notify is a no-op without a UI runner
+  }
+  syncStatus(ctx);
+}
+
 function discountsChanged(
   a: Map<string, JsonDiscount> | null,
   b: Map<string, JsonDiscount> | null,
@@ -735,6 +835,10 @@ let lastDiscountFetchTime = 0;
 // they cooperate: a poll that just ran lets the next turn skip its own fetch
 // within the TTL.
 const STATUS_CACHE_TTL_MS = 60000;
+// Throttle for the immediate /status refresh fired when flex blocks a prompt, so
+// a user retrying repeatedly doesn't hammer the endpoint while still getting fresh
+// data within seconds (vs. waiting on the 5-min idle poll).
+const BLOCK_REFRESH_THROTTLE_MS = 5000;
 // Lilac refreshes discounts ~every 10 minutes (per their docs: "Discounts refresh
 // approximately every 10 minutes and are locked in when a request starts"). Poll
 // every 5 min during idle — half the refresh window — so a long-idle session
@@ -803,6 +907,22 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // Cache + hot-swap freshly fetched discounts: update latestDiscounts, re-register
+  // the provider so other lilac models pick up the new price on their next request,
+  // and re-paint the footer from the LIVE model. Shared by the idle poll and the
+  // flex block refresh so the apply logic can't drift between them.
+  function applyFreshDiscounts(discounts: Map<string, JsonDiscount>, ctx: any): void {
+    cacheDiscounts(discounts);
+    latestDiscounts = discounts;
+    pi.registerProvider("lilac", {
+      baseUrl: BASE_URL,
+      apiKey: "$LILAC_API_KEY",
+      api: "openai-completions",
+      models: applyDiscounts(getListModels(), discounts),
+    });
+    syncStatus(ctx);
+  }
+
   /**
    * Background /status poll, fired every STATUS_POLL_INTERVAL_MS (5 min) from
    * session_start to cover idle sessions. Mirrors the discount half of
@@ -821,16 +941,25 @@ export default function (pi: ExtensionAPI) {
         syncStatus(ctx);
         return;
       }
-      cacheDiscounts(discounts);
-      latestDiscounts = discounts;
-      const freshList = getListModels();
-      pi.registerProvider("lilac", {
-        baseUrl: BASE_URL,
-        apiKey: "$LILAC_API_KEY",
-        api: "openai-completions",
-        models: applyDiscounts(freshList, discounts),
-      });
-      syncStatus(ctx);
+      applyFreshDiscounts(discounts, ctx);
+    }).catch(() => { /* network errors are non-fatal */ });
+  }
+
+  // Fire-and-forget /status refresh used when flex blocks a prompt, so the user
+  // isn't stuck on a stale low value from the 5-min idle poll. Throttled by
+  // BLOCK_REFRESH_THROTTLE_MS so repeated retries don't hammer the endpoint. Not
+  // signal-guarded (user-initiated, not session-scoped); network errors are non-fatal.
+  function triggerDiscountRefresh(ctx: any): void {
+    if (!cachedApiKey) return;
+    if (Date.now() - lastDiscountFetchTime < BLOCK_REFRESH_THROTTLE_MS) return;
+    fetchStatusDiscounts(cachedApiKey).then(discounts => {
+      if (!discounts) return;
+      lastDiscountFetchTime = Date.now();
+      if (!discountsChanged(latestDiscounts, discounts)) {
+        syncStatus(ctx);
+        return;
+      }
+      applyFreshDiscounts(discounts, ctx);
     }).catch(() => { /* network errors are non-fatal */ });
   }
 
@@ -1025,6 +1154,84 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
+  // lilac-flex: gate interactive prompts on the active lilac model's discount.
+  // Only interactive prompts are gated — extension-injected messages are skipped
+  // (programmatic; would loop) and rpc/print are skipped (a silent block would be
+  // a confusing failure in automation). A missing discount entry or no data yet
+  // counts as 0% (list price), consistent with applyDiscounts/applyDiscountInPlace.
+  // When blocked, the prompt is dropped (handled) and an immediate /status refresh
+  // is triggered so the next submission isn't waiting on the 5-min idle poll.
+  pi.on("input", async (event, ctx) => {
+    if (event.source !== "interactive") return { action: "continue" };
+
+    const threshold = getConfig().flexThreshold ?? null;
+    if (threshold == null) return { action: "continue" };
+
+    const model = ctx.model;
+    if (!model || model.provider !== "lilac") return { action: "continue" };
+
+    const discount = latestDiscounts?.get(model.id);
+    const discountPercent = discount?.discountPercent ?? 0;
+    if (discountPercent >= threshold) return { action: "continue" };
+
+    const desc = discount
+      ? `${discountPercent}% discount`
+      : (latestDiscounts ? "no discount on this model (list price)" : "no discount data yet");
+    ctx.ui.notify(
+      `lilac-flex: ${desc} < ${threshold}% threshold — blocked until the next poll. Re-submit once the discount improves, or run /lilac-flex to adjust.`,
+      "warning",
+    );
+    triggerDiscountRefresh(ctx);
+    return { action: "handled" };
+  });
+
+  pi.registerCommand("lilac-flex", {
+    description: "Set lilac flex discount threshold — only respond at/above this discount",
+    async handler(args, ctx) {
+      if (!ctx.hasUI) {
+        ctx.ui.notify("/lilac-flex requires interactive mode.", "error");
+        return;
+      }
+
+      const arg = (args ?? "").trim();
+      if (arg) {
+        const value = parseFlexArg(arg);
+        if (value === undefined) {
+          ctx.ui.notify("Usage: /lilac-flex [off | 0-100]", "warning");
+          return;
+        }
+        applyFlexThreshold(value, ctx);
+        return;
+      }
+
+      const current = getConfig().flexThreshold ?? null;
+      const labels = [
+        "Off — allow all discounts",
+        "≥ 50% discount",
+        "≥ 75% discount",
+        "Custom…",
+      ];
+      const choice = await ctx.ui.select("Lilac flex: only respond at/above this discount", labels);
+      if (choice === undefined) return; // cancelled
+
+      let value: number | null;
+      if (choice === labels[0]) value = null;
+      else if (choice === labels[1]) value = 50;
+      else if (choice === labels[2]) value = 75;
+      else {
+        const input = await ctx.ui.input("Threshold (0–100, or 'off'):", String(current ?? ""));
+        if (input === undefined) return; // cancelled
+        const parsed = parseFlexArg(input);
+        if (parsed === undefined) {
+          ctx.ui.notify("Invalid threshold. Use a number 0–100 or 'off'.", "warning");
+          return;
+        }
+        value = parsed;
+      }
+      applyFlexThreshold(value, ctx);
+    },
+  });
+
   pi.on("session_shutdown", () => {
     revalidateAbort?.abort();
     if (pollInterval) {
@@ -1034,5 +1241,5 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-export { fetchStatusDiscounts, applyDiscounts, applyDiscountInPlace, loadCachedDiscounts, cacheDiscounts, buildModels, applyModelOverride, parseModelOverrides, loadConfig, getConfig };
+export { fetchStatusDiscounts, applyDiscounts, applyDiscountInPlace, loadCachedDiscounts, cacheDiscounts, buildModels, applyModelOverride, parseModelOverrides, parseFlexThreshold, updateConfig, loadConfig, getConfig };
 export type { JsonDiscount, JsonModel, PatchEntry, PatchData, ModelOverride, LilacConfig };

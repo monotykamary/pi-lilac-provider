@@ -23,6 +23,7 @@ Access Kimi K2.6, GLM 5.1, MiniMax M2.7, and Gemma 4 models through Lilac's Open
 - **Reasoning Models** — Chain-of-thought via `chat_template_kwargs` (all models)
 - **Vision Support** — Image input on Kimi K2.6 and Gemma 4
 - **Context Caching** — Cache read pricing on Kimi K2.6 and GLM 5.1
+- **Flex (Discount Gating)** — Only let the LLM respond when the active model's discount meets a threshold you set (`/lilac-flex`)
 - **Idle GPU Scheduling** — Lilac leverages idle GPU capacity for cost-efficient inference
 
 ## Installation
@@ -218,6 +219,9 @@ Create `~/.pi/agent/extensions/lilac.json` (auto-populated with defaults on firs
 
 ```jsonc
 {
+  // Only respond when the active model's discount is >= this percent. null = off.
+  // See "Flex (Discount Gating)" below. Set interactively with /lilac-flex.
+  "flexThreshold": null,
   "modelOverrides": {
     // Disable full-history reasoning for kimi-k2.6 (e.g. to save tokens):
     "moonshotai/kimi-k2.6": { "compat": { "chatTemplateKwargs": { "preserve_thinking": false } } },
@@ -230,6 +234,29 @@ Create `~/.pi/agent/extensions/lilac.json` (auto-populated with defaults on firs
 ```
 
 The full set of overridable fields matches the model schema (`compat`, `thinkingLevelMap`, `cost`, `contextWindow`, `maxTokens`, `reasoning`, `input`). See [Compat Settings](#compat-settings) for the catalog of compat flags and what `chatTemplateKwargs` values mean per family. An invalid JSON file is left untouched (defaults are used) so a typo isn't silently wiped — fix the file and restart pi.
+
+### Flex (Discount Gating)
+
+Lilac's per-model discount fluctuates with idle-GPU supply. **Flex** lets you set a discount threshold so pi **only sends a prompt to the LLM when the active model's current discount is at or above it** — e.g. "only respond when the discount is ≥ 75%". Below the threshold, the prompt is blocked (dropped with a warning) until the next discount poll brings the discount back up. This is a spend-control feature: you only spend when supply is cheap.
+
+Set it interactively with the `/lilac-flex` command:
+
+```
+/lilac-flex          # picker: Off / ≥50% / ≥75% / Custom…
+/lilac-flex 75       # set threshold directly (only respond at ≥75% discount)
+/lilac-flex 50%      # trailing % accepted on the command line
+/lilac-flex off      # disable flex (allow all discounts)
+```
+
+The threshold persists in `~/.pi/agent/extensions/lilac.json` as `flexThreshold` (a number `0`–`100`, or `null` for off) alongside `modelOverrides`, so it survives restarts. `/lilac-flex` updates it live — no restart needed.
+
+Behavior notes:
+
+- **Gating point:** flex checks at prompt-submission time. When blocked, the prompt is dropped (you get a warning notification) and you re-submit once the discount improves. It does **not** queue the prompt.
+- **Scope:** only **interactive** (TUI-typed) prompts are gated. `rpc`/`print` (automation) and extension-injected messages are not gated, so flex never causes a silent failure in a pipeline or an extension loop. Flex only applies to the active **lilac** model; non-lilac models always pass.
+- **No data / no discount entry = 0%.** A lilac model with no discount (list price), or before the first discount poll has data, counts as 0% and is blocked when flex is on. This matches how discounts are priced elsewhere in the extension.
+- **Freshness:** when a prompt is blocked, the extension triggers an immediate `/status` refresh (throttled to once per ~5s) so you're not stuck on a stale low value from the 5-minute idle poll. The next submission sees the fresh discount. The footer status reflects the gate: `… · flex ≥75% ok` or `… · flex ≥75% blocked`.
+- **Discount lock-in:** per Lilac, a discount is locked in when a request starts. Flex gates on the best-known discount at submit time, which is what gets locked in for that turn.
 
 ## Updating Models
 

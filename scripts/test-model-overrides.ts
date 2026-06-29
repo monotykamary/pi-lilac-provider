@@ -166,9 +166,9 @@ const cfgPath = path.join(os.homedir(), ".pi", "agent", "extensions", "lilac.jso
   // Fresh tmpHome: no config file -> loadConfig auto-populates the scaffold and returns defaults
   assert(!fs.existsSync(cfgPath), "scaffold not present before first loadConfig");
   const cfg = loadConfig();
-  eq(cfg, { modelOverrides: {} }, "missing file -> defaults (empty modelOverrides)");
+  eq(cfg, { modelOverrides: {}, flexThreshold: null }, "missing file -> defaults (empty modelOverrides, flex off)");
   assert(fs.existsSync(cfgPath), "loadConfig auto-populates the scaffold file on missing file");
-  eq(JSON.parse(fs.readFileSync(cfgPath, "utf8")), { modelOverrides: {} }, "scaffold file contains the default shape");
+  eq(JSON.parse(fs.readFileSync(cfgPath, "utf8")), { modelOverrides: {}, flexThreshold: null }, "scaffold file contains the default shape");
 }
 
 {
@@ -192,7 +192,7 @@ const cfgPath = path.join(os.homedir(), ".pi", "agent", "extensions", "lilac.jso
   // Existing file with invalid JSON -> defaults returned, file left UNTOUCHED (typo not wiped)
   fs.writeFileSync(cfgPath, "not json {{{");
   const cfg = loadConfig();
-  eq(cfg, { modelOverrides: {} }, "invalid JSON -> defaults");
+  eq(cfg, { modelOverrides: {}, flexThreshold: null }, "invalid JSON -> defaults");
   assert(fs.readFileSync(cfgPath, "utf8") === "not json {{{", "invalid file is not overwritten (typo preserved)");
 }
 
