@@ -36,6 +36,12 @@
   ],
   "author": "",
   "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.74.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.79.8"
+  },
   "pi": {
     "extensions": [
       "./index.ts"

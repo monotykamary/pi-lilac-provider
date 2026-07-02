@@ -23,16 +23,16 @@
  */
 
 import fs from "fs";
-import os from "os";
 import path from "path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// Isolate config + cache to a temp HOME so loadConfig/cacheDiscounts never touch
+// Isolate config + cache to a temp agent dir so loadConfig/cacheDiscounts never touch
 // the real ~/.pi. Must be set before importing index.ts, which computes
 // CONFIG_PATH / CACHE_PATH at module scope.
 const tmpHome = `/tmp/pi-lilac-flex-test-${Date.now()}`;
 fs.mkdirSync(tmpHome, { recursive: true });
 process.env.HOME = tmpHome;
+process.env.PI_CODING_AGENT_DIR = path.join(tmpHome, ".pi", "agent");
 
 const {
   default: registerLilac,
@@ -65,7 +65,7 @@ function eq<T>(actual: T, expected: T, message: string) {
   }
 }
 
-const cfgPath = path.join(os.homedir(), ".pi", "agent", "extensions", "lilac.json");
+const cfgPath = path.join(getAgentDir(), "extensions", "lilac.json");
 const KIMI = "moonshotai/kimi-k2.6";
 
 // ─── parseFlexThreshold ───────────────────────────────────────────────────────

@@ -84,12 +84,11 @@
  * Then use /model to select from available models
  */
 
-import type { ExtensionAPI, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import modelsData from "./models.json" with { type: "json" };
 import customModelsData from "./custom-models.json" with { type: "json" };
 import patchData from "./patch.json" with { type: "json" };
 import fs from "fs";
-import os from "os";
 import path from "path";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -198,7 +197,7 @@ interface LilacConfig {
   flexThreshold?: number | null;
 }
 
-const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "lilac.json");
+const CONFIG_PATH = path.join(getAgentDir(), "extensions", "lilac.json");
 const DEFAULT_CONFIG: LilacConfig = { modelOverrides: {}, flexThreshold: null };
 
 // Validate user-supplied modelOverrides from the config file. Non-object ids and
@@ -433,7 +432,7 @@ const PROVIDER_ID = "lilac";
 const BASE_URL = "https://api.getlilac.com/v1";
 const STATUS_URL = "https://api.getlilac.com/status";
 const MODELS_URL = `${BASE_URL}/models`;
-const CACHE_DIR = path.join(os.homedir(), ".pi", "agent", "cache");
+const CACHE_DIR = path.join(getAgentDir(), "cache");
 const CACHE_PATH = path.join(CACHE_DIR, `${PROVIDER_ID}-models.json`);
 const DISCOUNT_CACHE_PATH = path.join(CACHE_DIR, `${PROVIDER_ID}-discounts.json`);
 const LIVE_FETCH_TIMEOUT_MS = 8000;

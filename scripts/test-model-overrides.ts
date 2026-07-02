@@ -20,19 +20,20 @@
  */
 
 import fs from "fs";
-import os from "os";
 import path from "path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const root = path.resolve(import.meta.dirname, "..");
 const modelsData = JSON.parse(fs.readFileSync(path.join(root, "models.json"), "utf8"));
 const customModelsData = JSON.parse(fs.readFileSync(path.join(root, "custom-models.json"), "utf8"));
 const patchData = JSON.parse(fs.readFileSync(path.join(root, "patch.json"), "utf8"));
 
-// Isolate config + cache to a temp HOME so loadConfig never touches the real ~/.pi.
+// Isolate config + cache to a temp agent dir so loadConfig never touches the real ~/.pi.
 // Must be set before importing index.ts, which computes CONFIG_PATH at module scope.
 const tmpHome = `/tmp/pi-lilac-override-test-${Date.now()}`;
 fs.mkdirSync(tmpHome, { recursive: true });
 process.env.HOME = tmpHome;
+process.env.PI_CODING_AGENT_DIR = path.join(tmpHome, ".pi", "agent");
 
 const {
   buildModels,
@@ -160,7 +161,7 @@ eq(parseModelOverrides({ id: 123 } as any), undefined, "non-object override (num
 
 console.log("\n--- loadConfig ---");
 
-const cfgPath = path.join(os.homedir(), ".pi", "agent", "extensions", "lilac.json");
+const cfgPath = path.join(getAgentDir(), "extensions", "lilac.json");
 
 {
   // Fresh tmpHome: no config file -> loadConfig auto-populates the scaffold and returns defaults
