@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Tests for the lilac-flex feature: discount-threshold gating.
+ * Tests for the Lilac flex feature: discount-threshold gating.
  *
  * Verifies, against the REAL exported helpers and registered handlers/commands
  * from index.ts (not a re-implementation):
@@ -14,9 +14,9 @@
  *     discount < threshold; allows (continue) when >= threshold, when flex is
  *     off, for non-lilac models, for non-interactive sources, and for models
  *     with no discount entry (treated as 0% -> blocked when flex on).
- *   - /lilac-flex command (integration via the registered handler): direct arg
- *     ("/lilac-flex 75", "off", "50%"), picker presets, custom input, cancel,
- *     invalid arg, and non-interactive guard.
+ *   - applyFlexThreshold (flex configuration, now driven by the /lilac-settings
+ *     flex row): sets flexThreshold, persists to disk, reports state against the
+ *     live model's discount, and is visible to the input gate.
  *
  * Config FS + discount cache are isolated to a temp HOME so nothing touches the
  * real ~/.pi.
@@ -29,7 +29,7 @@ import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent"
 // Isolate config + cache to a temp agent dir so loadConfig/cacheDiscounts never touch
 // the real ~/.pi. Must be set before importing index.ts, which computes
 // CONFIG_PATH / CACHE_PATH at module scope.
-const tmpHome = `/tmp/pi-lilac-flex-test-${Date.now()}`;
+const tmpHome = `/tmp/pi-lilac-test-${Date.now()}`;
 fs.mkdirSync(tmpHome, { recursive: true });
 process.env.HOME = tmpHome;
 process.env.PI_CODING_AGENT_DIR = path.join(tmpHome, ".pi", "agent");
@@ -41,6 +41,7 @@ const {
   getConfig,
   updateConfig,
   cacheDiscounts,
+  applyFlexThreshold,
 } = await import("../index.ts");
 
 let passed = 0;
@@ -167,7 +168,6 @@ cacheDiscounts(new Map([
 ]));
 
 const handlers = new Map<string, ((...args: any[]) => any)[]>();
-const commands = new Map<string, { handler: (...args: any[]) => any }>();
 
 const mockApi: ExtensionAPI = {
   registerProvider: () => {},
@@ -175,9 +175,7 @@ const mockApi: ExtensionAPI = {
     if (!handlers.has(event)) handlers.set(event, []);
     handlers.get(event)!.push(handler);
   },
-  registerCommand: (name: string, opts: any) => {
-    commands.set(name, opts);
-  },
+  registerCommand: () => {},
   appendEntry: () => {},
   exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 } as any;
@@ -266,102 +264,59 @@ updateConfig((c) => ({ ...c, flexThreshold: 25 }));
   eq(result, { action: "continue" }, "25% >= 25% threshold (inclusive) -> continue");
 }
 
-// ─── /lilac-flex command ──────────────────────────────────────────────────────
+// ─── applyFlexThreshold (flex configuration, driven by the /lilac-settings row) ─
 
-console.log("\n--- /lilac-flex command ---");
+console.log("\n--- applyFlexThreshold ---");
 
-assert(commands.has("lilac-flex"), "/lilac-flex command registered");
-const cmd = commands.get("lilac-flex")!;
-
-function runCmd(args: string, opts: { select?: string; input?: string; hasUI?: boolean; model?: any } = {}) {
+function runApply(value: number | null, model: any = { id: KIMI, provider: "lilac" }) {
   const notifications: { msg: string; level: string }[] = [];
   const ctx = {
-    hasUI: opts.hasUI ?? true,
-    model: opts.model ?? { id: KIMI, provider: "lilac" },
+    model,
     ui: {
       notify: (msg: string, level: string) => notifications.push({ msg, level }),
       setStatus: () => {},
       theme: { fg: (_c: string, t: string) => t },
-      select: async (_title: string, _labels: string[]) => opts.select,
-      input: async (_title: string, _placeholder: string) => opts.input,
     },
   };
-  return cmd.handler(args, ctx).then(() => ({ notifications, flexThreshold: getConfig().flexThreshold ?? null }));
+  applyFlexThreshold(value, ctx);
+  return { notifications, flexThreshold: getConfig().flexThreshold ?? null };
 }
 
-// direct numeric arg
+// set 75 (kimi seeded at 25% -> below threshold -> blocked-warning message)
 {
-  const { flexThreshold } = await runCmd("75");
-  assert(flexThreshold === 75, "/lilac-flex 75 -> flexThreshold 75");
-  assert(JSON.parse(fs.readFileSync(cfgPath, "utf8")).flexThreshold === 75, "/lilac-flex 75 persisted to disk");
+  const { flexThreshold, notifications } = runApply(75);
+  assert(flexThreshold === 75, "applyFlexThreshold(75) -> flexThreshold 75");
+  assert(JSON.parse(fs.readFileSync(cfgPath, "utf8")).flexThreshold === 75, "persisted to disk");
+  assert(notifications.some((n) => n.msg.includes("75%") && n.level === "warning"), "75 with kimi@25% -> warning, mentions threshold");
 }
 
-// trailing % accepted
+// off
 {
-  const { flexThreshold } = await runCmd("50%");
-  assert(flexThreshold === 50, "/lilac-flex 50% -> flexThreshold 50");
+  const { flexThreshold, notifications } = runApply(null);
+  assert(flexThreshold === null, "applyFlexThreshold(null) -> null");
+  assert(notifications.some((n) => n.msg.includes("off")), "off -> notify mentions off");
 }
 
-// off keyword
+// threshold below current discount -> allowed (info)
 {
-  const { flexThreshold } = await runCmd("off");
-  assert(flexThreshold === null, "/lilac-flex off -> flexThreshold null");
+  const { notifications } = runApply(20);
+  assert(notifications.some((n) => n.level === "info" && n.msg.includes("allowed")), "20 with kimi@25% -> info, allowed");
 }
 
-// invalid arg -> no change, usage notify
+// no discount data for model -> warning
 {
-  const { flexThreshold, notifications } = await runCmd("bogus");
-  assert(flexThreshold === null, "/lilac-flex bogus -> no change (still off)");
-  assert(notifications.some((n) => n.msg.includes("Usage")), "/lilac-flex bogus -> usage notify");
+  const { notifications } = runApply(75, { id: "zai-org/glm-5.1", provider: "lilac" });
+  assert(notifications.some((n) => n.level === "warning" && n.msg.includes("no discount data")), "uncached model + threshold -> warning, no discount data");
 }
 
-// picker: "≥ 75% discount" preset
+// setting flex via applyFlexThreshold is visible to the gate (config cache in sync)
 {
-  const { flexThreshold } = await runCmd("", { select: "≥ 75% discount" });
-  assert(flexThreshold === 75, "picker '≥ 75% discount' -> 75");
-}
-
-// picker: "Off" preset
-{
-  const { flexThreshold } = await runCmd("", { select: "Off — allow all discounts" });
-  assert(flexThreshold === null, "picker 'Off' -> null");
-}
-
-// picker: "Custom…" then input "60"
-{
-  const { flexThreshold } = await runCmd("", { select: "Custom…", input: "60" });
-  assert(flexThreshold === 60, "picker Custom + input 60 -> 60");
-}
-
-// picker: custom input invalid -> no change, warning
-{
-  const { flexThreshold, notifications } = await runCmd("", { select: "Custom…", input: "abc" });
-  assert(flexThreshold === 60, "invalid custom input -> no change (still 60)");
-  assert(notifications.some((n) => n.level === "warning" && n.msg.includes("Invalid")), "invalid custom input -> warning notify");
-}
-
-// picker cancelled (select returns undefined) -> no change, no notify
-{
-  const { flexThreshold, notifications } = await runCmd("", { select: undefined });
-  assert(flexThreshold === 60, "picker cancelled -> no change (still 60)");
-  assert(notifications.length === 0, "picker cancelled -> no notify");
-}
-
-// non-interactive guard -> error notify, no change
-{
-  const { flexThreshold, notifications } = await runCmd("75", { hasUI: false });
-  assert(flexThreshold === 60, "non-interactive -> no change (still 60)");
-  assert(notifications.some((n) => n.level === "error" && n.msg.includes("interactive")), "non-interactive -> error notify");
-}
-
-// setting flex via command is visible to the gate (config cache in sync)
-{
-  await runCmd("75");
+  runApply(75);
   const { result } = await runInput("interactive", { id: KIMI, provider: "lilac" });
-  eq(result, { action: "handled" }, "after /lilac-flex 75, gate blocks kimi@25%");
-  await runCmd("off");
+  eq(result, { action: "handled" }, "after applyFlexThreshold(75), gate blocks kimi@25%");
+  runApply(null);
   const { result: afterOff } = await runInput("interactive", { id: KIMI, provider: "lilac" });
-  eq(afterOff, { action: "continue" }, "after /lilac-flex off, gate allows kimi@25%");
+  eq(afterOff, { action: "continue" }, "after applyFlexThreshold(null), gate allows kimi@25%");
 }
 
 // ─── Summary ───────────────────────────────────────────────────────────────────

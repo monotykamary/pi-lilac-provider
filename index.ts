@@ -193,7 +193,7 @@ interface LilacConfig {
   modelOverrides?: Record<string, ModelOverride>;
   // Flex discount threshold: only allow interactive prompts to reach the LLM
   // when the active lilac model's discountPercent is >= this. null/undefined =
-  // off (allow all). Set via /lilac-flex; persisted in lilac.json.
+  // off (allow all). Set via /lilac-settings; persisted in lilac.json.
   flexThreshold?: number | null;
 }
 
@@ -312,12 +312,12 @@ function getConfig(): LilacConfig {
 }
 
 // Read-modify-write the config file and refresh the in-memory cache. Used by
-// /lilac-flex so a threshold change takes effect immediately (the input gate and
+// /lilac-settings so a threshold change takes effect immediately (the input gate and
 // footer read getConfig()) without a restart, and without clobbering the user's
 // modelOverrides. Reads via loadConfig (which validates), so modelOverrides the
 // user hand-edited since startup survive the spread. The file is normalized to a
 // discoverable shape (modelOverrides: {}, flexThreshold: null always present) so
-// /lilac-flex never strips the modelOverrides scaffold from the file.
+// /lilac-settings never strips the modelOverrides scaffold from the file.
 function updateConfig(mutator: (cfg: LilacConfig) => LilacConfig): LilacConfig {
   const next = mutator(loadConfig());
   const toWrite: LilacConfig = {
@@ -760,20 +760,9 @@ function syncStatus(ctx: any): void {
   }
 }
 
-// Parse a /lilac-flex argument or custom-threshold input: "off"/"none"/"" → null
-// (disabled), a number in [0,100] (optionally with a trailing %) → that number,
-// anything else → undefined (invalid).
-function parseFlexArg(raw: string): number | null | undefined {
-  const s = raw.trim().toLowerCase().replace(/%$/, "");
-  if (s === "" || s === "off" || s === "none") return null;
-  const n = Number(s);
-  if (!Number.isFinite(n) || n < 0 || n > 100) return undefined;
-  return Math.round(n);
-}
-
 // Persist a flex threshold via updateConfig and report the resulting state against
 // the live model's current discount. The footer is re-painted (syncStatus) so the
-// flex indicator appears immediately. Used by the /lilac-flex command.
+// flex indicator appears immediately. Used by the /lilac-settings flex row.
 function applyFlexThreshold(value: number | null, ctx: any): void {
   updateConfig((cfg) => ({ ...cfg, flexThreshold: value }));
   const threshold = getConfig().flexThreshold ?? null;
@@ -784,16 +773,16 @@ function applyFlexThreshold(value: number | null, ctx: any): void {
   let msg: string;
   let level: "info" | "warning";
   if (threshold == null) {
-    msg = "lilac-flex: off — all discounts allowed";
+    msg = "Flex: off — all discounts allowed";
     level = "info";
   } else if (pct == null) {
-    msg = `lilac-flex: ≥ ${threshold}% — no discount data yet; will block until the next poll`;
+    msg = `Flex: ≥ ${threshold}% — no discount data yet; will block until the next poll`;
     level = "warning";
   } else if (pct >= threshold) {
-    msg = `lilac-flex: ≥ ${threshold}% — current ${pct}% discount allowed`;
+    msg = `Flex: ≥ ${threshold}% — current ${pct}% discount allowed`;
     level = "info";
   } else {
-    msg = `lilac-flex: ≥ ${threshold}% — current ${pct}% discount blocked until it improves`;
+    msg = `Flex: ≥ ${threshold}% — current ${pct}% discount blocked until it improves`;
     level = "warning";
   }
   try {
@@ -861,6 +850,31 @@ export default function (pi: ExtensionAPI) {
   const embeddedModels = modelsData as JsonModel[];
   const customModels = customModelsData as JsonModel[];
   const patches = patchData as PatchData;
+
+  // Deferred model_select notify timer — see the model_select handler. Cleared on
+  // rapid re-switch and on session_shutdown so only the latest switch notifies.
+  let modelSelectNotifyTimer: ReturnType<typeof setTimeout> | null = null;
+  const MODEL_SELECT_NOTIFY_DELAY_MS = 250;
+
+  // Notify preserved-thinking state for a preserve-flag model. Computed from the
+  // build pipeline (config as source of truth, not event.model.compat), deferred
+  // so pi core's (and other extensions') notifications land first, and cancelled
+  // on re-switch/shutdown so only the latest shows. Always level "info" (not a
+  // warning) — the text conveys the coding/prose tradeoff.
+  function notifyPreservedThinkingFor(model: any, ctx: any): void {
+    if (!model || model.provider !== PROVIDER_ID) return;
+    const entry = collectPreserveState().find((e: any) => e.id === model.id);
+    if (!entry) return;
+    const flagValue = entry.flag === "clear_thinking" ? !entry.preserved : entry.preserved;
+    const msg = entry.preserved
+      ? `Preserved thinking ON for ${entry.name} (${entry.flag}: ${flagValue}) — suited for coding, but not for prose. Open /lilac-settings to change.`
+      : `Preserved thinking OFF for ${entry.name} (${entry.flag}: ${flagValue}) — reasoning trimmed each turn (lighter; better for prose). Open /lilac-settings to change.`;
+    if (modelSelectNotifyTimer) clearTimeout(modelSelectNotifyTimer);
+    modelSelectNotifyTimer = setTimeout(() => {
+      modelSelectNotifyTimer = null;
+      try { ctx.ui.notify(msg, "info"); } catch { /* notify is a no-op without a UI runner */ }
+    }, MODEL_SELECT_NOTIFY_DELAY_MS);
+  }
 
   // List-price models (patch applied, pre-discount), cached at module scope and
   // rebuilt only when the base set changes (see cacheModels). Used to recompute
@@ -981,6 +995,9 @@ export default function (pi: ExtensionAPI) {
     // syncStatus reads the LIVE ctx.model so a switch away from lilac before the
     // background fetch resolves never leaves a stale discount painted.
     syncStatus(ctx);
+    // Show the preserved-thinking notification on first load / resume if the
+    // active model carries a preserve flag (model_select may not fire on startup).
+    notifyPreservedThinkingFor(ctx.model, ctx);
 
     // Fire-and-forget: resolve API key, then fetch live data in background.
     // Provider and status are hot-swapped when results arrive.
@@ -1110,11 +1127,12 @@ export default function (pi: ExtensionAPI) {
     syncStatus(ctx);
   });
 
-  pi.on("model_select", async (_event, ctx) => {
+  pi.on("model_select", async (event, ctx) => {
     // ctx.model is the live session model (pi sets state.model before emitting
     // this event), so syncStatus paints/clears consistently with every other
     // handler — one source of truth for the footer.
     syncStatus(ctx);
+    notifyPreservedThinkingFor(event.model ?? ctx.model, ctx);
   });
 
   pi.on("session_tree", async (_event, ctx) => {
@@ -1153,7 +1171,7 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // lilac-flex: gate interactive prompts on the active lilac model's discount.
+  // Flex: gate interactive prompts on the active lilac model's discount.
   // Only interactive prompts are gated — extension-injected messages are skipped
   // (programmatic; would loop) and rpc/print are skipped (a silent block would be
   // a confusing failure in automation). A missing discount entry or no data yet
@@ -1177,62 +1195,153 @@ export default function (pi: ExtensionAPI) {
       ? `${discountPercent}% discount`
       : (latestDiscounts ? "no discount on this model (list price)" : "no discount data yet");
     ctx.ui.notify(
-      `lilac-flex: ${desc} < ${threshold}% threshold — blocked until the next poll. Re-submit once the discount improves, or run /lilac-flex to adjust.`,
+      `Flex: ${desc} < ${threshold}% threshold — blocked until the next poll. Re-submit once the discount improves, or open /lilac-settings to adjust.`,
       "warning",
     );
     triggerDiscountRefresh(ctx);
     return { action: "handled" };
   });
 
-  pi.registerCommand("lilac-flex", {
-    description: "Set lilac flex discount threshold — only respond at/above this discount",
-    async handler(args, ctx) {
-      if (!ctx.hasUI) {
-        ctx.ui.notify("/lilac-flex requires interactive mode.", "error");
+  // ─── /lilac-settings: settings UI (mirrors pi core /settings) ──────────────
+  // Opens a SettingsList (lazy-imported from pi-tui) via ctx.ui.custom(). Toggles
+  // write to ~/.pi/agent/extensions/lilac.json (modelOverrides for preserved
+  // thinking; flexThreshold via the shared applyFlexThreshold helper), refresh
+  // the in-memory config, bust the list-price model cache, and re-register the
+  // provider so the change takes effect immediately.
+  function collectPreserveState(): Array<{ id: string; name: string; flag: "clear_thinking" | "preserve_thinking"; preserved: boolean }> {
+    const resolved = buildModels(loadStaleModels(embeddedModels), customModels, patches, activeOverrides());
+    const out: Array<{ id: string; name: string; flag: "clear_thinking" | "preserve_thinking"; preserved: boolean }> = [];
+    for (const m of resolved) {
+      const kwargs = (m as any).compat?.chatTemplateKwargs;
+      if (!kwargs || typeof kwargs !== "object") continue;
+      if (typeof kwargs.clear_thinking === "boolean") {
+        out.push({ id: m.id, name: (m as any).name || m.id, flag: "clear_thinking", preserved: kwargs.clear_thinking === false });
+      } else if (typeof kwargs.preserve_thinking === "boolean") {
+        out.push({ id: m.id, name: (m as any).name || m.id, flag: "preserve_thinking", preserved: kwargs.preserve_thinking === true });
+      }
+    }
+    return out;
+  }
+
+  pi.registerCommand("lilac-settings", {
+    description: "Configure Lilac: flex discount threshold + preserved thinking per model",
+    async handler(_args, ctx) {
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("/lilac-settings requires TUI mode.", "error");
         return;
       }
+      const { SettingsList, Container } = await import("@earendil-works/pi-tui");
+      const { getSettingsListTheme, DynamicBorder } = await import("@earendil-works/pi-coding-agent");
 
-      const arg = (args ?? "").trim();
-      if (arg) {
-        const value = parseFlexArg(arg);
-        if (value === undefined) {
-          ctx.ui.notify("Usage: /lilac-flex [off | 0-100]", "warning");
-          return;
-        }
-        applyFlexThreshold(value, ctx);
-        return;
-      }
+      const currentFlex = getConfig().flexThreshold ?? null;
 
-      const current = getConfig().flexThreshold ?? null;
-      const labels = [
-        "Off — allow all discounts",
-        "≥ 50% discount",
-        "≥ 75% discount",
-        "Custom…",
-      ];
-      const choice = await ctx.ui.select("Lilac flex: only respond at/above this discount", labels);
-      if (choice === undefined) return; // cancelled
+      await ctx.ui.custom((_tui, theme, _kb, done) => {
+        const border = () => new DynamicBorder((s: string) => theme.fg("border", s));
+        // SettingsList left-aligns the value column after the widest label (capped
+        // at 30 cols). A label wider than 30 shifts that row's value out of
+        // alignment, so cap model-name labels.
+        const truncateLabel = (s: string) => (s.length > 30 ? s.slice(0, 27) + "..." : s);
 
-      let value: number | null;
-      if (choice === labels[0]) value = null;
-      else if (choice === labels[1]) value = 50;
-      else if (choice === labels[2]) value = 75;
-      else {
-        const input = await ctx.ui.input("Threshold (0–100, or 'off'):", String(current ?? ""));
-        if (input === undefined) return; // cancelled
-        const parsed = parseFlexArg(input);
-        if (parsed === undefined) {
-          ctx.ui.notify("Invalid threshold. Use a number 0–100 or 'off'.", "warning");
-          return;
-        }
-        value = parsed;
-      }
-      applyFlexThreshold(value, ctx);
+        const items: any[] = [
+          {
+            id: "flex",
+            label: "Flex threshold",
+            description: "Only respond when the active model's discount is at/above this. 'off' allows all. (Custom values: edit ~/.pi/agent/extensions/lilac.json.)",
+            currentValue: currentFlex == null ? "off" : String(currentFlex),
+            values: ["off", "50", "75"],
+          },
+          {
+            id: "preserved-thinking",
+            label: "Preserved thinking",
+            description: "Per-model Preserve Thinking / Clear Thinking (full-history reasoning). Preserve Thinking keeps all turns' reasoning; Clear Thinking lets the template drop older reasoning (saves tokens, can hurt multi-turn recall / cause overthinking).",
+            currentValue: "configure",
+            submenu: (_currentValue: string, subDone: (v?: string) => void) => {
+              // Re-read state on each open so toggles from a previous visit (which
+              // wrote lilac.json + refreshed config) are reflected — a snapshot
+              // captured at panel-open time would show stale values after a toggle.
+              const fresh = collectPreserveState();
+              const subItems = fresh.map((e) => ({
+                id: `preserve:${e.id}`,
+                label: truncateLabel(e.name),
+                description: `${e.id} — Preserve Thinking keeps full reasoning history across turns; Clear Thinking lets the template drop older reasoning (saves tokens, can hurt multi-turn recall / cause overthinking).`,
+                currentValue: e.preserved ? "Preserve Thinking" : "Clear Thinking",
+                values: ["Preserve Thinking", "Clear Thinking"],
+              }));
+              const subList = new SettingsList(
+                subItems,
+                Math.min(subItems.length + 2, 15),
+                getSettingsListTheme(),
+                (id: string, newValue: string) => {
+                  const modelId = id.slice("preserve:".length);
+                  const entry = fresh.find((p) => p.id === modelId);
+                  if (!entry) return;
+                  const preservedOn = newValue === "Preserve Thinking";
+                  const flagValue = entry.flag === "clear_thinking" ? !preservedOn : preservedOn;
+                  updateConfig((cfg) => {
+                    const overrides = cfg.modelOverrides ?? (cfg.modelOverrides = {});
+                    const ov = overrides[modelId] ?? (overrides[modelId] = {});
+                    const compat = ov.compat ?? (ov.compat = {});
+                    const kwargs = compat.chatTemplateKwargs ?? (compat.chatTemplateKwargs = {});
+                    kwargs[entry.flag] = flagValue;
+                    return cfg;
+                  });
+                  listModelsCache = null;
+                  pi.registerProvider("lilac", {
+                    baseUrl: BASE_URL,
+                    apiKey: "$LILAC_API_KEY",
+                    api: "openai-completions",
+                    models: applyDiscounts(getListModels(), latestDiscounts),
+                  });
+                  syncStatus(ctx);
+                  ctx.ui.notify(`Preserved thinking ${preservedOn ? "on" : "off"} for ${entry.name} — takes effect now.`, "info");
+                },
+                () => subDone(),
+                { enableSearch: true },
+              );
+              // The outer container's borders already frame the panel; return the
+              // list directly so we don't render a second border pair.
+              return subList;
+            },
+          },
+        ];
+
+        const container = new Container();
+        container.addChild(border());
+
+        const settingsList = new SettingsList(
+          items,
+          Math.min(items.length + 2, 15),
+          getSettingsListTheme(),
+          (id: string, newValue: string) => {
+            if (id === "flex") {
+              const value = newValue === "off" ? null : Number(newValue);
+              applyFlexThreshold(value, ctx);
+            }
+          },
+          () => done(undefined),
+          { enableSearch: true },
+        );
+        container.addChild(settingsList);
+        container.addChild(border());
+
+        return {
+          render(width: number) {
+            return container.render(width);
+          },
+          invalidate() {
+            container.invalidate();
+          },
+          handleInput(data: string) {
+            settingsList.handleInput?.(data);
+          },
+        };
+      });
     },
   });
 
   pi.on("session_shutdown", () => {
     revalidateAbort?.abort();
+    if (modelSelectNotifyTimer) { clearTimeout(modelSelectNotifyTimer); modelSelectNotifyTimer = null; }
     if (pollInterval) {
       clearInterval(pollInterval);
       pollInterval = null;
@@ -1240,5 +1349,5 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-export { fetchStatusDiscounts, applyDiscounts, applyDiscountInPlace, loadCachedDiscounts, cacheDiscounts, buildModels, applyModelOverride, parseModelOverrides, parseFlexThreshold, updateConfig, loadConfig, getConfig };
+export { fetchStatusDiscounts, applyDiscounts, applyDiscountInPlace, loadCachedDiscounts, cacheDiscounts, buildModels, applyModelOverride, parseModelOverrides, parseFlexThreshold, updateConfig, loadConfig, getConfig, applyFlexThreshold };
 export type { JsonDiscount, JsonModel, PatchEntry, PatchData, ModelOverride, LilacConfig };

@@ -23,7 +23,7 @@ Access Kimi K2.6, GLM 5.1, MiniMax M2.7, and Gemma 4 models through Lilac's Open
 - **Reasoning Models** — Chain-of-thought via `chat_template_kwargs` (all models)
 - **Vision Support** — Image input on Kimi K2.6 and Gemma 4
 - **Context Caching** — Cache read pricing on Kimi K2.6 and GLM 5.1
-- **Flex (Discount Gating)** — Only let the LLM respond when the active model's discount meets a threshold you set (`/lilac-flex`)
+- **Flex (Discount Gating)** — Only let the LLM respond when the active model's discount meets a threshold you set (`/lilac-settings`)
 - **Idle GPU Scheduling** — Lilac leverages idle GPU capacity for cost-efficient inference
 
 ## Installation
@@ -220,7 +220,7 @@ Create `~/.pi/agent/extensions/lilac.json` (auto-populated with defaults on firs
 ```jsonc
 {
   // Only respond when the active model's discount is >= this percent. null = off.
-  // See "Flex (Discount Gating)" below. Set interactively with /lilac-flex.
+  // See "Flex (Discount Gating)" below. Set via /lilac-settings.
   "flexThreshold": null,
   "modelOverrides": {
     // Disable full-history reasoning for kimi-k2.6 (e.g. to save tokens):
@@ -239,16 +239,13 @@ The full set of overridable fields matches the model schema (`compat`, `thinking
 
 Lilac's per-model discount fluctuates with idle-GPU supply. **Flex** lets you set a discount threshold so pi **only sends a prompt to the LLM when the active model's current discount is at or above it** — e.g. "only respond when the discount is ≥ 75%". Below the threshold, the prompt is blocked (dropped with a warning) until the next discount poll brings the discount back up. This is a spend-control feature: you only spend when supply is cheap.
 
-Set it interactively with the `/lilac-flex` command:
+Set it via the **Flex threshold** row in [`/lilac-settings`](#settings-ui) — cycle `off` / `50` / `75`:
 
 ```
-/lilac-flex          # picker: Off / ≥50% / ≥75% / Custom…
-/lilac-flex 75       # set threshold directly (only respond at ≥75% discount)
-/lilac-flex 50%      # trailing % accepted on the command line
-/lilac-flex off      # disable flex (allow all discounts)
+/lilac-settings     # open the settings panel → Flex threshold row
 ```
 
-The threshold persists in `~/.pi/agent/extensions/lilac.json` as `flexThreshold` (a number `0`–`100`, or `null` for off) alongside `modelOverrides`, so it survives restarts. `/lilac-flex` updates it live — no restart needed.
+The threshold persists in `~/.pi/agent/extensions/lilac.json` as `flexThreshold` (a number `0`–`100`, or `null` for off) alongside `modelOverrides`, so it survives restarts. `/lilac-settings` updates it live — no restart needed. For a custom value (e.g. 60), edit `flexThreshold` in that file directly.
 
 Behavior notes:
 
@@ -257,6 +254,17 @@ Behavior notes:
 - **No data / no discount entry = 0%.** A lilac model with no discount (list price), or before the first discount poll has data, counts as 0% and is blocked when flex is on. This matches how discounts are priced elsewhere in the extension.
 - **Freshness:** when a prompt is blocked, the extension triggers an immediate `/status` refresh (throttled to once per ~5s) so you're not stuck on a stale low value from the 5-minute idle poll. The next submission sees the fresh discount. The footer status reflects the gate: `… · flex ≥75% ok` or `… · flex ≥75% blocked`.
 - **Discount lock-in:** per Lilac, a discount is locked in when a request starts. Flex gates on the best-known discount at submit time, which is what gets locked in for that turn.
+
+### Settings UI
+
+`/lilac-settings` opens an interactive settings panel (mirrors pi core's `/settings` — bordered `SettingsList`, Esc to go back) to configure Lilac without editing JSON by hand:
+
+- **Flex threshold** (`off` / `50` / `75`) — the spend-control gate from [Flex (Discount Gating)](#flex-discount-gating); custom values via `lilac.json`.
+- **Preserved thinking** (nested submenu, one row per model) — toggles `clear_thinking` (GLM-5.2 / GLM-5.1) / `preserve_thinking` (Kimi K2.6) in `modelOverrides` between **Preserve Thinking** (keep full reasoning history across turns; the default, `clear_thinking: false` / `preserve_thinking: true`) and **Clear Thinking** (let the template drop older reasoning; saves tokens, but can degrade multi-turn recall / cause overthinking).
+
+Changes write to `~/.pi/agent/extensions/lilac.json`, refresh the in-memory config, and re-register the provider, so they take effect immediately — no restart needed.
+
+When you switch to — or start pi on — a Lilac model that carries a preserved-thinking flag (e.g. GLM-5.2 / GLM-5.1, Kimi K2.6), an info notification reports the state and how to change it, e.g. `Preserved thinking ON for glm-5.2 (clear_thinking: false) — suited for coding, but not for prose. Open /lilac-settings to change.` (OFF reads `... reasoning trimmed each turn (lighter; better for prose) ...`). It's an ordinary info notification (not a warning), so it doesn't paint bright yellow.
 
 ## Updating Models
 
