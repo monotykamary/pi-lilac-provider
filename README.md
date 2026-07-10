@@ -74,10 +74,8 @@ pi
 | Model | Context | Vision | Reasoning | Input $/M | Cache Read $/M | Output $/M |
 |-------|---------|--------|-----------|-----------|-----------------|------------|
 | Gemma 4 | 262K | ✅ | ✅ | $0.11 | — | $0.35 |
-| GLM 5.1 | 203K | ❌ | ✅ | $0.90 | $0.27 | $3.00 |
 | GLM 5.2 | 524K | ❌ | ✅ | $0.90 | $0.27 | $3.00 |
 | Kimi K2.6 | 262K | ✅ | ✅ | $0.70 | $0.20 | $3.50 |
-| MiniMax M2.7 | 205K | ❌ | ✅ | $0.30 | $0.06 | $1.20 |
 | MiniMax M3 | 1.0M | ✅ | ✅ | $0.28 | $0.05 | $1.10 |
 
 *Costs are per million tokens. Prices subject to change — check [getlilac.com](https://getlilac.com/) for current pricing.*
