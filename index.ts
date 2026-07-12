@@ -21,7 +21,7 @@
  * MiniMax M3). The forward-compatible form sends BOTH `thinking` and
  * `enable_thinking` so whichever key the template honors is set:
  *   { chat_template_kwargs: { thinking: <bool>, enable_thinking: <bool> } }
- * GLM 5.2 adds `reasoning_effort` (high = lower-latency, xhigh = max) via a
+ * GLM 5.2 adds `reasoning_effort` (high for lower-latency, max for deep) via a
  * thinkingLevelMap. MiniMax M3 maps to the `thinking_mode` enum as three pi
  * thinking levels — off→disabled, minimal→adaptive (model decides), high→enabled
  * — so adaptive is selectable via pi's Shift+Tab cycle (off→minimal→high). Pi
@@ -99,7 +99,7 @@ interface JsonDiscount {
   creditMultiplier: number;
 }
 
-// Maps pi's thinking levels (off, minimal, low, medium, high, xhigh) to the
+// Maps pi's thinking levels (off, minimal, low, medium, high, xhigh, max) to the
 // provider-specific effort string sent on the wire. A `null` value marks a
 // level as unsupported — clampThinkingLevel skips it when resolving the
 // user's selection. Mirrors pi-ai's ThinkingLevelMap shape.
@@ -110,6 +110,7 @@ type ThinkingLevelMap = {
   medium?: string | null;
   high?: string | null;
   xhigh?: string | null;
+  max?: string | null;
 };
 
 // A chat_template_kwargs value, mirroring pi-ai's ChatTemplateKwargSchema. Scalar

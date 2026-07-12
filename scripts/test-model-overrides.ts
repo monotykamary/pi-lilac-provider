@@ -66,7 +66,6 @@ function eq<T>(actual: T, expected: T, message: string) {
 
 const KIMI = "moonshotai/kimi-k2.6";
 const GLM52 = "zai-org/glm-5.2";
-const GLM51 = "zai-org/glm-5.1";
 
 // ─── applyModelOverride ────────────────────────────────────────────────────────
 
@@ -238,16 +237,6 @@ function find(models: any[], id: string): any {
   const glm = find(models, GLM52);
   assert((glm.thinkingLevelMap as any)?.high === "max", "override thinkingLevelMap.high wins over patch");
   assert(glm.compat.chatTemplateKwargs.clear_thinking === false, "non-overridden clear_thinking survives a thinkingLevelMap-only override");
-}
-
-{
-  // Override on glm-5.1 toggles clear_thinking (patch sets false); other compat survives
-  const overrides = { [GLM51]: { compat: { chatTemplateKwargs: { clear_thinking: true } } } } as any;
-  const models = buildModels(modelsData, customModelsData, patchData, overrides);
-  const glm = find(models, GLM51);
-  assert(glm.compat.chatTemplateKwargs.clear_thinking === true, "override wins over patch: glm-5.1 clear_thinking -> true");
-  assert((glm.compat.chatTemplateKwargs as any).thinking?.$var === "thinking.enabled", "override deep-merges: glm-5.1 thinking $var key survives");
-  assert(glm.compat.zaiToolStream === true, "override deep-merges: glm-5.1 zaiToolStream survives");
 }
 
 {

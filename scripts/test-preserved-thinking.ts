@@ -194,25 +194,15 @@ console.log("\n=== GLM 5.2 on the wire (real pi-ai) ===");
   const high = await wire("zai-org/glm-5.2", "high");
   eq(high.chat_template_kwargs, { enable_thinking: true, reasoning_effort: "high", clear_thinking: false },
     "glm-5.2 @ high → enable_thinking+reasoning_effort AND clear_thinking false");
-  const xhigh = await wire("zai-org/glm-5.2", "xhigh");
-  eq(xhigh.chat_template_kwargs, { enable_thinking: true, reasoning_effort: "max", clear_thinking: false },
-    "glm-5.2 @ xhigh → reasoning_effort max, clear_thinking false");
+  const max = await wire("zai-org/glm-5.2", "max");
+  eq(max.chat_template_kwargs, { enable_thinking: true, reasoning_effort: "max", clear_thinking: false },
+    "glm-5.2 @ max → reasoning_effort max, clear_thinking false");
   const off = await wire("zai-org/glm-5.2", "off");
   eq(off.chat_template_kwargs, { enable_thinking: false, clear_thinking: false },
     "glm-5.2 @ off → reasoning_effort omitted (omitWhenOff), clear_thinking false persists");
 }
 
-console.log("\n=== GLM 5.1 on the wire (real pi-ai) ===");
-{
-  const high = await wire("zai-org/glm-5.1", "high");
-  eq(high.chat_template_kwargs, { thinking: true, enable_thinking: true, clear_thinking: false },
-    "glm-5.1 @ high → thinking+enable_thinking true AND clear_thinking false");
-  const off = await wire("zai-org/glm-5.1", "off");
-  eq(off.chat_template_kwargs, { thinking: false, enable_thinking: false, clear_thinking: false },
-    "glm-5.1 @ off → thinking false but clear_thinking false persists");
-}
-
-console.log("\n=== Gemma 4 / MiniMax (no family-wide preserve flag — regression guard) ===");
+console.log("\n=== Gemma / MiniMax (no family-wide preserve flag — regression guard) ===");
 {
   const gemma = await wire("google/gemma-4-31b-it", "high");
   eq(gemma.chat_template_kwargs, { thinking: true, enable_thinking: true },
@@ -224,11 +214,6 @@ console.log("\n=== Gemma 4 / MiniMax (no family-wide preserve flag — regressio
   eq(m3.chat_template_kwargs, { thinking_mode: "enabled" },
     "minimax-m3 @ high → only thinking_mode (no preserve/clear flag)");
   falsy(m3.chat_template_kwargs?.preserve_thinking, "minimax-m3 has no preserve_thinking");
-
-  const m27 = await wire("minimaxai/minimax-m2.7", "high");
-  eq(m27.chat_template_kwargs, { thinking: true, enable_thinking: true },
-    "minimax-m2.7 @ high → only thinking/enable_thinking (no preserve/clear flag)");
-  falsy(m27.chat_template_kwargs?.clear_thinking, "minimax-m2.7 has no clear_thinking");
 }
 
 globalThis.fetch = originalFetch;

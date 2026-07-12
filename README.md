@@ -119,7 +119,7 @@ model's chat template honors differs per family. The provider uses pi's
 Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7 use the forward-compatible form
 that sends **both** `thinking` and `enable_thinking`, so whichever key the
 template honors is set. GLM 5.2 additionally maps pi's thinking levels to
-`reasoning_effort` (`high` = lower-latency, `xhigh` = `max`). MiniMax M3 uses
+`reasoning_effort` (`high` = lower-latency, `max` = deepest). MiniMax M3 uses
 the `thinking_mode` enum, exposed as three pi thinking levels: `off` →
 `disabled` (never think), `minimal` → `adaptive` (the model decides), `high` →
 `enabled` (always think). Pi starts at `off` (`disabled`); cycle to `minimal`

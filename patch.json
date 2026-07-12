@@ -53,7 +53,7 @@
       "low": "high",
       "medium": "high",
       "high": "high",
-      "xhigh": "max"
+      "max": "max"
     }
   },
   "google/gemma-4-31b-it": {
