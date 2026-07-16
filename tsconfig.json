@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "esModuleInterop": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@earendil-works/pi-coding-agent": ["./tests/__mocks__/pi-coding-agent.ts"],
+      "@earendil-works/pi-tui": ["./tests/__mocks__/pi-tui.ts"]
+    }
+  },
+  "include": ["./*.ts"],
+  "exclude": ["node_modules", "tests"]
+}
