@@ -214,7 +214,7 @@ function parseModelOverrides(raw: unknown): Record<string, ModelOverride> | unde
     if (o.thinkingLevelMap && typeof o.thinkingLevelMap === "object") {
       const m: Record<string, string | null> = {};
       for (const [k, v] of Object.entries(o.thinkingLevelMap as Record<string, unknown>)) {
-        if (v === null || typeof v === "string") m[k] = v;
+        if (v === null || typeof v === "string") m[k] = v as string | null;
       }
       if (Object.keys(m).length > 0) parsed.thinkingLevelMap = m as ThinkingLevelMap;
     }
@@ -1228,7 +1228,56 @@ export default function (pi: ExtensionAPI) {
     description: "Configure Lilac: flex discount threshold + preserved thinking per model",
     async handler(_args, ctx) {
       if (ctx.mode !== "tui") {
-        ctx.ui.notify("/lilac-settings requires TUI mode.", "error");
+        // GUI/RPC fallback: a select -> select flow. The custom SettingsList is
+        // TUI-only. One setting per run; per-model preserved thinking is a
+        // pick-model -> pick-value pair.
+        if (!ctx.hasUI) {
+          ctx.ui.notify("/lilac-settings requires a UI (TUI or GUI).", "error");
+          return;
+        }
+        const currentFlex = getConfig().flexThreshold ?? null;
+        const guiItems = [
+          { id: "flex", label: "Flex threshold", current: currentFlex == null ? "off" : String(currentFlex), values: ["off", "50", "75"] },
+          { id: "preserved-thinking", label: "Preserved thinking", current: "configure" },
+        ];
+        const pick = await ctx.ui.select("Lilac settings — pick a setting", guiItems.map((i) => `${i.label}: ${i.current}`));
+        if (pick === undefined) return;
+        const item = guiItems.find((i) => pick.startsWith(`${i.label}:`));
+        if (!item) return;
+        if (item.id === "flex") {
+          const v = await ctx.ui.select("Flex threshold", ["off", "50", "75"]);
+          if (v === undefined) return;
+          applyFlexThreshold(v === "off" ? null : Number(v), ctx);
+        } else {
+          const fresh = collectPreserveState();
+          if (fresh.length === 0) { ctx.ui.notify("No models support preserved thinking.", "info"); return; }
+          const modelPick = await ctx.ui.select("Preserved thinking — pick a model", fresh.map((e) => `${e.name}: ${e.preserved ? "Preserve Thinking" : "Clear Thinking"}`));
+          if (modelPick === undefined) return;
+          const entry = fresh.find((e) => modelPick.startsWith(`${e.name}:`));
+          if (!entry) return;
+          const v = await ctx.ui.select(entry.name, ["Preserve Thinking", "Clear Thinking"]);
+          if (v === undefined) return;
+          const preservedOn = v === "Preserve Thinking";
+          const flagValue = entry.flag === "clear_thinking" ? !preservedOn : preservedOn;
+          updateConfig((cfg) => {
+            const overrides = cfg.modelOverrides ?? (cfg.modelOverrides = {});
+            const ov = overrides[entry.id] ?? (overrides[entry.id] = {});
+            const compat = ov.compat ?? (ov.compat = {});
+            const kwargs = compat.chatTemplateKwargs ?? (compat.chatTemplateKwargs = {});
+            kwargs[entry.flag] = flagValue;
+            return cfg;
+          });
+          listModelsCache = null;
+          pi.registerProvider("lilac", {
+            baseUrl: BASE_URL,
+            apiKey: "$LILAC_API_KEY",
+            api: "openai-completions",
+            models: applyDiscounts(getListModels(), latestDiscounts),
+          });
+          syncStatus(ctx);
+          ctx.ui.notify(`Preserved thinking ${preservedOn ? "on" : "off"} for ${entry.name} — takes effect now.`, "info");
+        }
+        ctx.ui.notify("Run /lilac-settings again for more.", "info");
         return;
       }
       const { SettingsList, Container } = await import("@earendil-works/pi-tui");
