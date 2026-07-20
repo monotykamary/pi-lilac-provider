@@ -102,10 +102,7 @@ pi --provider lilac --model moonshotai/kimi-k2.6
 
 ### Thinking Mode
 
-All Lilac models toggle reasoning via `chat_template_kwargs`, but the key each
-model's chat template honors differs per family. The provider uses pi's
-`chat-template` thinkingFormat with per-model `chatTemplateKwargs` (configured in
-`patch.json`) so the right key reaches each template:
+All Lilac models toggle reasoning via `chat_template_kwargs`, but the key each model's chat template honors differs per family. The provider uses pi's `chat-template` thinkingFormat with per-model `chatTemplateKwargs` (configured in `patch.json`) so the right key reaches each template:
 
 | Model | Reasoning key | Default |
 |-------|---------------|---------|
@@ -116,21 +113,9 @@ model's chat template honors differs per family. The provider uses pi's
 | MiniMax M2.7 | `thinking` + `enable_thinking` (bool) | on |
 | MiniMax M3 | `thinking_mode` (`disabled`\|`adaptive`\|`enabled`) | adaptive (server) |
 
-Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7 use the forward-compatible form
-that sends **both** `thinking` and `enable_thinking`, so whichever key the
-template honors is set. GLM 5.2 additionally maps pi's thinking levels to
-`reasoning_effort` (`high` = lower-latency, `max` = deepest). MiniMax M3 uses
-the `thinking_mode` enum, exposed as three pi thinking levels: `off` →
-`disabled` (never think), `minimal` → `adaptive` (the model decides), `high` →
-`enabled` (always think). Pi starts at `off` (`disabled`); cycle to `minimal`
-for M3's adaptive "model decides" mode. (The selector/footer show pi's level
-names — `minimal`/`high` — not the `thinking_mode` values; pi has no per-model
-level-relabel hook.)
+Kimi K2.6, GLM 5.1, Gemma 4, and MiniMax M2.7 use the forward-compatible form that sends **both** `thinking` and `enable_thinking`, so whichever key the template honors is set. GLM 5.2 additionally maps pi's thinking levels to `reasoning_effort` (`high` = lower-latency, `max` = deepest). MiniMax M3 uses the `thinking_mode` enum, exposed as three pi thinking levels: `off` → `disabled` (never think), `minimal` → `adaptive` (the model decides), `high` → `enabled` (always think). Pi starts at `off` (`disabled`); cycle to `minimal` for M3's adaptive "model decides" mode. (The selector/footer show pi's level names — `minimal`/`high` — not the `thinking_mode` values; pi has no per-model level-relabel hook.)
 
-**Preserved thinking (full-history reasoning).** By default these templates
-trim older assistant reasoning between turns (each vendor's default), which
-degrades multi-turn recall. Three models opt into full-history preservation via
-a template flag sent alongside the reasoning key:
+**Preserved thinking (full-history reasoning).** By default these templates trim older assistant reasoning between turns (each vendor's default), which degrades multi-turn recall. Three models opt into full-history preservation via a template flag sent alongside the reasoning key:
 
 | Model | Flag | Effect |
 |-------|------|--------|
@@ -138,14 +123,9 @@ a template flag sent alongside the reasoning key:
 | GLM 5.1 | `clear_thinking: false` | keeps reasoning for all turns (default: clears before the last user message) |
 | GLM 5.2 | `clear_thinking: false` | keeps reasoning for all turns (default: clears before the last user message) |
 
-Kimi K2.6 and GLM 5.2 are E2E-verified on the sibling neuralwatt provider via a
-3-turn, two-20-digit-number recall test (Kimi 0/6 → 6/6, GLM 5.2 1/4 → 4/4);
-GLM 5.1 uses the same `clear_thinking` mechanism (confirmed in its HuggingFace
-chat template). Gemma 4 and MiniMax M2.7/M3 expose no family-wide preserve flag,
-so their older assistant reasoning is trimmed per the template default.
+Kimi K2.6 and GLM 5.2 are E2E-verified on the sibling neuralwatt provider via a 3-turn, two-20-digit-number recall test (Kimi 0/6 → 6/6, GLM 5.2 1/4 → 4/4); GLM 5.1 uses the same `clear_thinking` mechanism (confirmed in its HuggingFace chat template). Gemma 4 and MiniMax M2.7/M3 expose no family-wide preserve flag, so their older assistant reasoning is trimmed per the template default.
 
-In pi, reasoning models automatically use the appropriate thinking format. Use
-Shift+Tab to control thinking level.
+In pi, reasoning models automatically use the appropriate thinking format. Use Shift+Tab to control thinking level.
 
 ### Vision
 
