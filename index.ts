@@ -128,7 +128,7 @@ interface JsonModel {
   id: string;
   name: string;
   reasoning: boolean;
-  input: string[];
+  input: ("text" | "image")[];
   cost: {
     input: number;
     output: number;
@@ -163,7 +163,7 @@ interface JsonModel {
 interface PatchEntry {
   name?: string;
   reasoning?: boolean;
-  input?: string[];
+  input?: ("text" | "image")[];
   cost?: {
     input?: number;
     output?: number;
@@ -450,7 +450,7 @@ function transformApiModel(apiModel: any): JsonModel | null {
   // multiply and preserves sub-cent cache prices like 0.003 ($/M).
   const toPerM = (v: any) => Math.round((typeof v === "string" ? parseFloat(v) : (v || 0)) * 1_000_000 * 1e6) / 1e6;
 
-  const inputTypes: string[] = ["text"];
+  const inputTypes: ("text" | "image")[] = ["text"];
   if (hasImage) inputTypes.push("image");
   // Video is sent as image frames, so we don't add a separate "video" input type
 
