@@ -417,7 +417,10 @@ function buildModels(
 ): JsonModel[] {
   const modelMap = new Map<string, JsonModel>();
 
-  for (const model of base) {
+  // Seed with the base list plus grace-period deprecated models so patch.json
+  // entries apply to deprecated models exactly as while the model was live
+  // (withDeprecated keeps live data on id conflicts).
+  for (const model of withDeprecated(base)) {
     modelMap.set(model.id, model);
   }
 
@@ -454,7 +457,7 @@ function buildModels(
     }
   }
 
-  return withDeprecated(Array.from(modelMap.values()));
+  return Array.from(modelMap.values());
 }
 
 // ─── Stale-While-Revalidate Model Sync ────────────────────────────────────────
