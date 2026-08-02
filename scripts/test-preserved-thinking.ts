@@ -92,9 +92,20 @@ const PI_AI_API = path.join(
 );
 function os_home_pi_ai() {
   // Resolve the pi-ai package shipped inside the globally-installed pi agent.
+  let piAgentSibling = "";
+  try {
+    const agentPackage = path.join(HERE, "..", "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
+    piAgentSibling = path.join(path.dirname(fs.realpathSync(agentPackage)), "..", "pi-ai");
+  } catch {
+    // The fallback candidates below cover direct pi-ai installs and global pi.
+  }
   const candidates = [
+    process.env.PI_AI_PATH,
+    piAgentSibling,
+    path.join(HERE, "..", "node_modules", "@earendil-works", "pi-ai"),
+    path.join(HERE, "..", "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai"),
     "/Users/monotykamary/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai",
-  ];
+  ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0);
   for (const c of candidates) if (fs.existsSync(c)) return c;
   throw new Error("Could not locate pi-ai package in the global pi install.");
 }

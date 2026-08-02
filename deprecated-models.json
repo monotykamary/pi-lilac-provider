@@ -1,1 +1,49 @@
-{}
+{
+  "zai-org/glm-5.1": {
+    "id": "zai-org/glm-5.1",
+    "name": "GLM 5.1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.9,
+      "output": 3,
+      "cacheRead": 0.27,
+      "cacheWrite": 0
+    },
+    "contextWindow": 202752,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
+      "maxTokensField": "max_completion_tokens",
+      "thinkingFormat": "qwen-chat-template",
+      "zaiToolStream": true
+    },
+    "deprecatedAt": "2026-08-02T19:34:35.890Z"
+  },
+  "minimaxai/minimax-m2.7": {
+    "id": "minimaxai/minimax-m2.7",
+    "name": "MiniMax M2.7",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0.055,
+      "cacheWrite": 0
+    },
+    "contextWindow": 204800,
+    "maxTokens": 204800,
+    "compat": {
+      "supportsDeveloperRole": true,
+      "supportsStore": false,
+      "maxTokensField": "max_completion_tokens",
+      "thinkingFormat": "qwen-chat-template"
+    },
+    "deprecatedAt": "2026-08-02T19:34:35.890Z"
+  }
+}
