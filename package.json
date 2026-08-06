@@ -1,6 +1,6 @@
 {
   "name": "pi-lilac-provider",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "packageManager": "pnpm@11.20.0",
   "description": "Lilac provider extension for pi - Access Kimi K2.6, GLM 5.1, and Gemma 4 models through Lilac's OpenAI-compatible API on idle GPUs",
   "type": "module",
@@ -42,7 +42,7 @@
     "@earendil-works/pi-coding-agent": ">=0.74.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.84.0",
     "@types/node": "25.9.1",
     "knip": "6.14.1",
     "typescript": "6.0.3"
