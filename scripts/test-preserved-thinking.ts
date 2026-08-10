@@ -32,6 +32,7 @@
  * Run: node scripts/test-preserved-thinking.ts
  */
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { pathToFileURL } from "url";
 
@@ -104,7 +105,7 @@ function os_home_pi_ai() {
     piAgentSibling,
     path.join(HERE, "..", "node_modules", "@earendil-works", "pi-ai"),
     path.join(HERE, "..", "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai"),
-    "/Users/monotykamary/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai",
+    path.join(os.homedir(), ".npm-global", "lib", "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai"),
   ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0);
   for (const c of candidates) if (fs.existsSync(c)) return c;
   throw new Error("Could not locate pi-ai package in the global pi install.");
