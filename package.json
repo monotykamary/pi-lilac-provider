@@ -1,6 +1,6 @@
 {
   "name": "pi-lilac-provider",
-  "version": "1.9.10",
+  "version": "1.9.11",
   "packageManager": "pnpm@11.20.0",
   "description": "Lilac provider extension for pi - Access Kimi K2.6, GLM 5.1, and Gemma 4 models through Lilac's OpenAI-compatible API on idle GPUs",
   "type": "module",
