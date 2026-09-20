@@ -1,3 +1,6 @@
+> [!WARNING]
+> **Deprecated & archived** — Lilac no longer serves inference, so this provider is no longer functional or maintained. The npm package has been deprecated and this repository has been archived. Use another pi provider instead.
+
 <div align="center">
 
 # 💜 pi-lilac-provider
